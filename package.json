@@ -15,7 +15,7 @@
     "jspdf": "^4.2.0",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.576.0",
-    "mongodb": "^7.1.0",
+    "mongodb": "3.7",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
