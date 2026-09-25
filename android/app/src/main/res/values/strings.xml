@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Pecel Lele POS</string>
+    <string name="title_activity_main">Pecel Lele POS</string>
+    <string name="package_name">com.plci.kantinsmb.pos</string>
+    <string name="custom_url_scheme">com.plci.kantinsmb.pos</string>
+</resources>
