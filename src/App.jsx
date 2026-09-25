@@ -5,15 +5,13 @@
 // PIN 8080: Edit Product (Nama, Harga, Stok)
 // =============================================================================
 
-import React, { useState, Suspense, lazy } from 'react';
+import React, { useState, Suspense } from 'react';
 import { ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
 import { BRANCH_CONFIG } from './shared/constants';
 
-// Lazy load each view for bundle optimization
-const NormalCashierView = lazy(() => import('./views/NormalCashierView'));
-// const NormalCashierView2 = lazy(() => import('./views/NormalCashierView2')); // Nonaktifkan Normal Cashier 2
-const FastCashierView = lazy(() => import('./views/FastCashierView'));
-const ProductEditView = lazy(() => import('./views/ProductEditView'));
+import NormalCashierView from './views/NormalCashierView';
+import FastCashierView from './views/FastCashierView';
+import ProductEditView from './views/ProductEditView';
 
 import Sidenavbar from './components/Sidenavbar';
 import ErrorBoundary from './components/ErrorBoundary';

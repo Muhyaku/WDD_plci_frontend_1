@@ -23,6 +23,15 @@ export default class ErrorBoundary extends React.Component {
   }
 
   handleReset = () => {
+    const errorStr = (this.state.error?.message || this.state.error?.toString() || '');
+    if (
+      errorStr.includes('dynamically imported module') ||
+      errorStr.includes('Failed to fetch') ||
+      errorStr.includes('Loading chunk')
+    ) {
+      window.location.reload();
+      return;
+    }
     this.setState({
       hasError: false,
       error: null,
@@ -42,6 +51,8 @@ export default class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       const { error, errorInfo, showStack, copied } = this.state;
+      const errorStr = (error?.message || error?.toString() || '');
+      const isDynamicImportError = errorStr.includes('dynamically imported module') || errorStr.includes('Failed to fetch') || errorStr.includes('Loading chunk');
 
       return (
         <div className="flex-1 w-full h-full min-h-[100dvh] bg-slate-900 text-white p-4 sm:p-8 flex items-center justify-center font-sans overflow-y-auto">
@@ -62,7 +73,9 @@ export default class ErrorBoundary extends React.Component {
                   Tampilan Mengalami Kendala / Error
                 </h2>
                 <p className="text-xs sm:text-sm text-slate-400 mt-1 font-medium">
-                  Sidenavbar tetap aktif. Anda dapat berpindah mode kasir atau memuat ulang halaman ini.
+                  {isDynamicImportError
+                    ? 'Versi aplikasi baru telah dirilis atau terjadi gangguan jaringan. Klik tombol di bawah untuk memuat ulang aplikasi.'
+                    : 'Sidenavbar tetap aktif. Anda dapat berpindah mode kasir atau memuat ulang halaman ini.'}
                 </p>
               </div>
             </div>

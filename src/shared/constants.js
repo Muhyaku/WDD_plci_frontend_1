@@ -3,12 +3,17 @@
 // Digunakan oleh App.jsx (router), NormalCashierView, FastCashierView, ProductEditView
 // =============================================================================
 
-// --- API ENDPOINTS ---
-export const API_URL = "https://wddplcibackend.vercel.app/api/transactions";
-export const SETTINGS_URL = "https://wddplcibackend.vercel.app/api/settings";
-export const ACTIVITY_URL = "https://wddplcibackend.vercel.app/api/activities";
-export const MENU_MASTER_URL = "https://wddplcibackend.vercel.app/api/menu";
-export const EMERGENCY_URL = "https://wddplcibackend.vercel.app/api/emergency";
+// --- API BASE & ENDPOINTS ---
+const BACKEND_BASE = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_BACKEND_URL) 
+  ? import.meta.env.VITE_BACKEND_URL.replace(/\/$/, '') 
+  : "https://wdd-plci-backend-2.vercel.app";
+
+export const BACKEND_BASE_URL = BACKEND_BASE;
+export const API_URL = `${BACKEND_BASE}/api/transactions`;
+export const SETTINGS_URL = `${BACKEND_BASE}/api/settings`;
+export const ACTIVITY_URL = `${BACKEND_BASE}/api/activities`;
+export const MENU_MASTER_URL = `${BACKEND_BASE}/api/menu`;
+export const EMERGENCY_URL = `${BACKEND_BASE}/api/emergency`;
 
 // --- BRANCH & MODE CONFIG ---
 // HANYA TERDAPAT 1 KEY PIN INTI: 1010 (Kasir Penjualan Normal)

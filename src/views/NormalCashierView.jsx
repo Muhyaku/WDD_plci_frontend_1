@@ -568,15 +568,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
     }
   };
 
-  const handleEmergencySystem = async () => {
-    if (!window.confirm('🚨 Kirim Laporan Darurat sekarang?')) return;
-    try {
-      const res = await fetch('https://wddplcibackend.vercel.app/api/emergency', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheet: branchInfo.name, message: 'KASIR MENGALAMI KENDALA / ERROR!', timestamp: new Date().toLocaleTimeString('id-ID') }),
-      });
-      if (res.ok) alert('✅ Laporan Darurat Terkirim! Bos Dede akan segera mengecek.');
-    } catch (e) { alert('❌ Gagal mengirim laporan. Cek koneksi internet!'); }
+  const handleEmergencySystem = () => {
+    alert('⚠️ Fitur Laporan Darurat / Telegram sedang dalam perbaikan (Under Maintenance). Silakan hubungi admin secara langsung.');
   };
 
   // --- BLUETOOTH PRINTER ---
