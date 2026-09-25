@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Clock, ArrowLeft, Loader2, Wallet, CreditCard, ShoppingBag,
-  Trash2, RefreshCw, X, AlertCircle, LogOut
+  Trash2, RefreshCw, X, AlertCircle, LogOut, CloudUpload
 } from 'lucide-react';
 
 import {
@@ -20,12 +20,23 @@ import {
   calculateNextQueueNumber, fetchMenuData, fetchTodayTransactions
 } from '../shared/utils';
 
+import SyncModal from '../components/SyncModal';
+import {
+  saveLocalTransaction,
+  updateLocalTransaction,
+  saveLocalParkedOrder,
+  deleteLocalParkedOrder,
+  getSyncStats
+} from '../services/localDb';
+
 export default function FastCashierView({ branchInfo, onLogout }) {
   // --- DATA STATE ---
   const [masterMenus, setMasterMenus] = useState([]);
   const [activityLogs, setActivityLogs] = useState([]);
   const [rawData, setRawData] = useState([]);
   const [isFetching, setIsFetching] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
   // --- CART STATE ---
   const [cart, setCart] = useState({});
@@ -66,6 +77,11 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       setMasterMenus(menuResult.masterMenus || []);
       setActivityLogs(menuResult.activityLogs || []);
       setRawData(txData || []);
+
+      // Ambil jumlah pending sync lokal
+      getSyncStats(branchInfo.sheetName)
+        .then(s => setPendingSyncCount(s.pending))
+        .catch(() => {});
     } catch (e) {
       console.error('Gagal load data fast cashier:', e);
     } finally {
@@ -266,72 +282,38 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       totalPengeluaran: 0
     }];
 
-    // --- OPTIMISTIC: Inject transaksi ke rawData lokal agar stok langsung berkurang ---
-    const optimisticTx = {
-      _id: `optimistic_${Date.now()}`,
-      ...payloads[0],
-      createdAt: new Date().toISOString(),
-      isDeleted: false,
-    };
-    setRawData(prev => [...prev, optimisticTx]);
+    // --- ATOMIC PERSISTENCE: Simpan transaksi ke IndexedDB lokal (<50ms) ---
+    const localRecord = await saveLocalTransaction(payloads[0]);
+
+    setRawData(prev => [...prev, localRecord]);
 
     if (isPark) {
       const newOrder = {
         ...transactionDataForPrint,
-        id: Date.now(),
-        dbId: null, // will be updated after server response
+        id: localRecord.localId || Date.now(),
+        localId: localRecord.localId,
+        dbId: null,
         status: 'BELUM_BAYAR',
         tanggal: todayStr,
         rawCart: cart,
       };
       setLocalOrders(prev => [...prev, newOrder]);
+      saveLocalParkedOrder(newOrder).catch(console.warn);
     }
 
     // --- OPTIMISTIC: Clear cart & release UI immediately ---
-    const savedCart = { ...cart };
     setCart({});
     setIsSubmitting(false);
 
-    // --- BACKGROUND: Send to server & sync ---
-    try {
-      const resTx = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloads)
-      });
-      if (!resTx.ok) {
-        throw new Error(`HTTP Error ${resTx.status}`);
-      }
-      const resJson = await resTx.json();
-      if (resJson.status === 'error') {
-        throw new Error(resJson.message || 'Gagal menyimpan transaksi');
-      }
-
-      // Update parked order with real DB id
-      if (isPark && resJson.data?.[0]?._id) {
-        setLocalOrders(prev => prev.map(o =>
-          o.dbId === null && o.items === itemsStr
-            ? { ...o, dbId: resJson.data[0]._id }
-            : o
-        ));
-      }
-
-      // Full sync from server (replaces optimistic data with real data)
-      loadData();
-    } catch (e) {
-      console.error('Gagal mengirim transaksi ke server:', e);
-      // Rollback: remove optimistic tx and restore cart
-      setRawData(prev => prev.filter(t => t._id !== optimisticTx._id));
-      setCart(savedCart);
-      setStockAlert('⚠️ Koneksi server lambat/gagal! Cart dikembalikan.');
-      setTimeout(() => setStockAlert(null), 4000);
-    }
+    getSyncStats(branchInfo.sheetName)
+      .then(s => setPendingSyncCount(s.pending))
+      .catch(() => {});
   };
 
   // --- MARK TAPPING ORDER AS PAID ---
   const markAsPaid = async (orderId, payMethod) => {
     if (isSubmitting) return;
-    const targetOrder = localOrders.find(o => o.id === orderId);
+    const targetOrder = localOrders.find(o => o.id === orderId || o.localId === orderId);
     if (!targetOrder) return;
 
     setIsSubmitting(true);
@@ -343,7 +325,7 @@ export default function FastCashierView({ branchInfo, onLogout }) {
     const queueLabel = targetOrder.queue.split(' (')[0];
     const finalJenisPengeluaran = `[${queueLabel}] ${cleanItemsStr}, ++ PAY:${payMethod}|${targetOrder.total}|0`;
 
-    const payload = [{
+    const payload = {
       sheet: branchInfo.sheetName,
       tanggal: todayStr,
       cash: payMethod === 'Cash' ? targetOrder.total : 0,
@@ -351,31 +333,26 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       gofood: payMethod === 'QRIS' ? targetOrder.total : 0,
       jenisPengeluaran: finalJenisPengeluaran,
       totalPengeluaran: 0,
-      overrideDbId: targetOrder.dbId,
-    }];
+      overrideDbId: targetOrder.dbId || undefined,
+    };
+
+    if (targetOrder.localId) {
+      await updateLocalTransaction(targetOrder.localId, payload);
+    } else {
+      await saveLocalTransaction(payload);
+    }
 
     // --- OPTIMISTIC: Update rawData and localOrders immediately ---
     setRawData(prev => prev.map(t => 
-      t._id === targetOrder.dbId ? { ...t, ...payload[0] } : t
+      (t.localId === targetOrder.localId || (targetOrder.dbId && t._id === targetOrder.dbId)) ? { ...t, ...payload } : t
     ));
     setLocalOrders(prev => prev.map(o => 
-      o.id === orderId ? { ...o, status: 'LUNAS', items: finalJenisPengeluaran } : o
+      (o.id === orderId || o.localId === orderId) ? { ...o, status: 'LUNAS', items: finalJenisPengeluaran } : o
     ));
+    deleteLocalParkedOrder(orderId).catch(console.warn);
     setIsSubmitting(false);
-
-    // --- BACKGROUND: Sync with server ---
-    try {
-      await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      loadData();
-    } catch (e) {
-      console.error('Gagal update pelunasan:', e);
-      setStockAlert('⚠️ Sinkronisasi pelunasan ke server gagal! Coba load ulang.');
-      setTimeout(() => setStockAlert(null), 3000);
-    }
+    loadData();
+    getSyncStats(branchInfo.sheetName).then(s => setPendingSyncCount(s.pending)).catch(() => {});
   };
 
   return (
@@ -488,6 +465,15 @@ export default function FastCashierView({ branchInfo, onLogout }) {
           {/* REFRESH BUTTON */}
           <button onClick={loadData} disabled={isFetching} className="bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-black text-xs px-2 py-2 rounded-2xl flex flex-col items-center justify-center shrink-0 h-full shadow-sm active:scale-95 transition-all w-[80px]">
             <RefreshCw size={24} className={`mb-1 ${isFetching ? 'animate-spin' : ''}`} /> REFRESH
+          </button>
+
+          {/* SYNC CLOUD BUTTON */}
+          <button onClick={() => setIsSyncModalOpen(true)} className={`font-black text-xs px-2 py-2 rounded-2xl flex flex-col items-center justify-center shrink-0 h-full shadow-sm active:scale-95 transition-all w-[85px] border ${
+            pendingSyncCount > 0 ? 'bg-amber-500 text-white border-amber-600 animate-pulse' : 'bg-emerald-600 text-white border-emerald-700'
+          }`}>
+            <CloudUpload size={24} className="mb-1" />
+            <span>SYNC CLOUD</span>
+            {pendingSyncCount > 0 && <span className="text-[10px] bg-white text-amber-800 px-1.5 py-0 rounded-full font-black mt-0.5">{pendingSyncCount}</span>}
           </button>
 
           {/* TAHAN PESANAN LABEL */}
@@ -628,6 +614,14 @@ export default function FastCashierView({ branchInfo, onLogout }) {
           </div>
         </div>
       </div>
+
+      {/* SYNC CLOUD MODAL */}
+      <SyncModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        sheetName={branchInfo?.sheetName}
+        onSyncComplete={loadData}
+      />
     </div>
   );
 }

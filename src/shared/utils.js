@@ -3,6 +3,14 @@
 // =============================================================================
 
 import { MENU_PLCI, MENU_MM, STOCK_BYPASS_IDS, API_URL, MENU_MASTER_URL, ACTIVITY_URL } from './constants.js';
+import {
+  getTodayLocalTransactions,
+  saveLocalTransactionsBatch,
+  getLocalMenuMaster,
+  saveLocalMenuMaster,
+  getLocalActivityLogs,
+  saveLocalActivityLogs
+} from '../services/localDb.js';
 
 // --- FORMAT RUPIAH ---
 export const formatRupiah = (number) =>
@@ -303,16 +311,42 @@ export const buildActiveMenuList = (baseMenuList, masterMenus, liveStockCalculat
 // --- FETCH MENU DATA (menu master + activity logs) ---
 export const fetchMenuData = async (sheetName) => {
   try {
-    const [resMenu, resLog] = await Promise.all([
-      fetch(`${MENU_MASTER_URL}?sheet=${encodeURIComponent(sheetName)}`),
-      fetch(ACTIVITY_URL),
+    // 1. Coba baca dari Local IndexedDB
+    const [localMenus, localLogs] = await Promise.all([
+      getLocalMenuMaster(sheetName).catch(() => []),
+      getLocalActivityLogs(sheetName).catch(() => [])
     ]);
-    const menuData = resMenu.ok ? await resMenu.json() : [];
-    const logData = resLog.ok ? await resLog.json() : [];
-    return {
-      masterMenus: Array.isArray(menuData) ? menuData : [],
-      activityLogs: Array.isArray(logData) ? logData : [],
-    };
+
+    if (localMenus && localMenus.length > 0) {
+      return {
+        masterMenus: localMenus,
+        activityLogs: localLogs || [],
+      };
+    }
+
+    // 2. Jika local DB masih kosong, fetch dari server & simpan lokal
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      const [resMenu, resLog] = await Promise.all([
+        fetch(`${MENU_MASTER_URL}?sheet=${encodeURIComponent(sheetName)}`).catch(() => null),
+        fetch(ACTIVITY_URL).catch(() => null),
+      ]);
+      const menuData = resMenu && resMenu.ok ? await resMenu.json() : [];
+      const logData = resLog && resLog.ok ? await resLog.json() : [];
+
+      if (Array.isArray(menuData) && menuData.length > 0) {
+        await saveLocalMenuMaster(menuData).catch(console.warn);
+      }
+      if (Array.isArray(logData) && logData.length > 0) {
+        await saveLocalActivityLogs(logData).catch(console.warn);
+      }
+
+      return {
+        masterMenus: Array.isArray(menuData) ? menuData : [],
+        activityLogs: Array.isArray(logData) ? logData : [],
+      };
+    }
+
+    return { masterMenus: [], activityLogs: [] };
   } catch (e) {
     console.error('Error fetching menu data:', e);
     return { masterMenus: [], activityLogs: [] };
@@ -323,11 +357,27 @@ export const fetchMenuData = async (sheetName) => {
 export const fetchTodayTransactions = async (sheetName) => {
   try {
     const todayStr = getTodayStr();
-    const fetchUrl = `${API_URL}?sheet=${encodeURIComponent(sheetName)}&tanggal=${encodeURIComponent(todayStr)}`;
-    const res = await fetch(fetchUrl);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data) ? data : [];
+
+    // 1. Coba baca dari Local IndexedDB
+    const localTxs = await getTodayLocalTransactions(sheetName, todayStr).catch(() => []);
+    if (localTxs && localTxs.length > 0) {
+      return localTxs;
+    }
+
+    // 2. Jika local DB masih kosong, coba fetch dari server & simpan lokal
+    if (typeof navigator === 'undefined' || navigator.onLine) {
+      const fetchUrl = `${API_URL}?sheet=${encodeURIComponent(sheetName)}&tanggal=${encodeURIComponent(todayStr)}`;
+      const res = await fetch(fetchUrl).catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          await saveLocalTransactionsBatch(data).catch(console.warn);
+          return data;
+        }
+      }
+    }
+
+    return localTxs || [];
   } catch (e) {
     console.error('Error fetching today transactions:', e);
     return [];

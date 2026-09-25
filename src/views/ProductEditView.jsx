@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // PRODUCT EDIT VIEW â€” PIN 8080
 // KEBIJAKAN DATA KETAT:
 //   - Seluruh data wajib dari database. ZERO fallback / dummy data.
@@ -21,35 +21,76 @@ import {
   formatRupiah, getTodayStr, getBaseMenuList,
   calculateLiveStock, buildActiveMenuList,
 } from '../shared/utils';
+import {
+  getLocalMenuMaster,
+  saveLocalMenuMaster,
+  getLocalActivityLogs,
+  saveLocalActivityLogs,
+  getTodayLocalTransactions,
+  saveLocalTransactionsBatch,
+  updateLocalMenuItem,
+  addLocalActivityLog
+} from '../services/localDb';
 
 // =============================================================================
-// FETCH STRICT â€” Lempar error jika gagal, TIDAK ada fallback/dummy data
+// FETCH STRICT â€” Prioritas Local IndexedDB, Fallback Network saat Online
 // =============================================================================
 const fetchMenuDataStrict = async (sheetName) => {
-  const [resMenu, resLog] = await Promise.all([
-    fetch(`${MENU_MASTER_URL}?sheet=${encodeURIComponent(sheetName)}`),
-    fetch(ACTIVITY_URL),
+  // 1. Coba baca dari Local IndexedDB terlebih dahulu
+  const [localMenus, localLogs] = await Promise.all([
+    getLocalMenuMaster(sheetName).catch(() => []),
+    getLocalActivityLogs(sheetName).catch(() => [])
   ]);
 
-  if (!resMenu.ok) throw new Error(`Gagal memuat Menu Master (HTTP ${resMenu.status})`);
-  if (!resLog.ok) throw new Error(`Gagal memuat Activity Log (HTTP ${resLog.status})`);
+  if (localMenus && localMenus.length > 0) {
+    return { masterMenus: localMenus, activityLogs: localLogs || [] };
+  }
 
-  const menuData = await resMenu.json();
-  const logData = await resLog.json();
+  // 2. Jika local belum ada dan ada internet, fetch dari server & simpan lokal
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    const [resMenu, resLog] = await Promise.all([
+      fetch(`${MENU_MASTER_URL}?sheet=${encodeURIComponent(sheetName)}`),
+      fetch(ACTIVITY_URL),
+    ]);
 
-  if (!Array.isArray(menuData)) throw new Error('Format data Menu Master tidak valid dari server');
-  if (!Array.isArray(logData)) throw new Error('Format data Activity Log tidak valid dari server');
+    if (!resMenu.ok) throw new Error(`Gagal memuat Menu Master (HTTP ${resMenu.status})`);
+    if (!resLog.ok) throw new Error(`Gagal memuat Activity Log (HTTP ${resLog.status})`);
 
-  return { masterMenus: menuData, activityLogs: logData };
+    const menuData = await resMenu.json();
+    const logData = await resLog.json();
+
+    if (!Array.isArray(menuData)) throw new Error('Format data Menu Master tidak valid dari server');
+    if (!Array.isArray(logData)) throw new Error('Format data Activity Log tidak valid dari server');
+
+    await saveLocalMenuMaster(menuData).catch(console.warn);
+    await saveLocalActivityLogs(logData).catch(console.warn);
+
+    return { masterMenus: menuData, activityLogs: logData };
+  }
+
+  throw new Error('Data produk belum tersimpan di memori tablet dan perangkat sedang offline.');
 };
 
 const fetchTodayTransactionsStrict = async (sheetName) => {
   const todayStr = getTodayStr();
-  const res = await fetch(`${API_URL}?sheet=${encodeURIComponent(sheetName)}&tanggal=${encodeURIComponent(todayStr)}`);
-  if (!res.ok) throw new Error(`Gagal memuat Transaksi Hari Ini (HTTP ${res.status})`);
-  const data = await res.json();
-  if (!Array.isArray(data)) throw new Error('Format data transaksi tidak valid dari server');
-  return data;
+
+  // 1. Coba baca dari Local IndexedDB
+  const localTxs = await getTodayLocalTransactions(sheetName, todayStr).catch(() => []);
+  if (localTxs && localTxs.length > 0) {
+    return localTxs;
+  }
+
+  // 2. Jika local kosong dan online, coba ambil dari server & simpan lokal
+  if (typeof navigator === 'undefined' || navigator.onLine) {
+    const res = await fetch(`${API_URL}?sheet=${encodeURIComponent(sheetName)}&tanggal=${encodeURIComponent(todayStr)}`);
+    if (!res.ok) throw new Error(`Gagal memuat Transaksi Hari Ini (HTTP ${res.status})`);
+    const data = await res.json();
+    if (!Array.isArray(data)) throw new Error('Format data transaksi tidak valid dari server');
+    await saveLocalTransactionsBatch(data).catch(console.warn);
+    return data;
+  }
+
+  return [];
 };
 
 // =============================================================================
@@ -235,15 +276,33 @@ export default function ProductEditView({ branchInfo, onLogout }) {
     };
 
     try {
-      const response = await fetch(MENU_MASTER_URL, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+      // 1. Simpan ke Local IndexedDB terlebih dahulu (Atomic write)
+      await updateLocalMenuItem(editModal.item.id, {
+        name: newName,
+        price: newPrice,
+        stock: newStock,
+        lastUpdatedDate: todayStr,
       });
 
-      if (!response.ok) {
-        const errBody = await response.json().catch(() => ({}));
-        throw new Error(errBody.message || `Server error HTTP ${response.status}`);
+      // Catat log aktivitas lokal jika stok berubah
+      if (editModal.item.stock !== newStock) {
+        await addLocalActivityLog({
+          sheet: branchInfo.sheetName,
+          actionCategory: 'UBAH_STOK',
+          menuName: newName,
+          detailAction: `MANUAL UPDATE: Mengubah Stok dari [${editModal.item.stock || 0}] menjadi [${newStock}] porsi.`,
+          timestamp: new Date().toLocaleTimeString('id-ID'),
+          dateString: todayStr
+        }).catch(console.warn);
+      }
+
+      // 2. Jika online, kirim juga ke server di background
+      if (typeof navigator === 'undefined' || navigator.onLine) {
+        fetch(MENU_MASTER_URL, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).catch(err => console.warn('[ProductEditView] Background server sync warning:', err));
       }
 
       setSubmitStatus('success');
@@ -254,7 +313,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
         setSubmitStatus(null);
       }, 700);
 
-      // Refresh dari DB setelah modal menutup untuk verifikasi bahwa data tersimpan
+      // Refresh data lokal setelah modal menutup
       setTimeout(() => loadData(false), 900);
 
     } catch (error) {

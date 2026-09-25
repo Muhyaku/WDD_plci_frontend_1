@@ -9,7 +9,7 @@ import {
   Clock, ListFilter, ArrowLeft, Loader2, Wallet, CreditCard, FileText,
   CheckCircle2, AlertCircle, User, LogOut, ShoppingBag, ChevronUp,
   Trash2, RefreshCw, Printer, Menu, X, Settings, CheckCircle, Pencil,
-  Save, Lock,
+  Save, Lock, CloudUpload,
 } from 'lucide-react';
 
 import {
@@ -21,6 +21,15 @@ import {
   calculateLiveStock, buildActiveMenuList, calculateNextQueueNumber,
   fetchMenuData, fetchTodayTransactions,
 } from '../shared/utils';
+import SyncModal from '../components/SyncModal';
+import {
+  saveLocalTransaction,
+  deleteLocalTransaction,
+  updateLocalTransaction,
+  saveLocalParkedOrder,
+  deleteLocalParkedOrder,
+  getSyncStats,
+} from '../services/localDb';
 
 // =============================================================================
 // NORMAL CASHIER VIEW COMPONENT
@@ -103,6 +112,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
   const [activityLogs, setActivityLogs] = useState([]);
   const [internalRawData, setInternalRawData] = useState([]);
   const [internalIsFetching, setInternalIsFetching] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
   const todayStr = useMemo(() => getTodayStr(), []);
   const baseMenuList = useMemo(() => getBaseMenuList(branchInfo?.brand), [branchInfo?.brand]);
@@ -119,6 +130,11 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
       setMasterMenus(menuResult?.masterMenus || []);
       setActivityLogs(menuResult?.activityLogs || []);
       setInternalRawData(txData || []);
+
+      // Ambil jumlah pending sync lokal
+      getSyncStats(branchInfo.sheetName)
+        .then(s => setPendingSyncCount(s.pending))
+        .catch(() => {});
     } catch (e) {
       console.error('Gagal load data normal cashier:', e);
     } finally {
@@ -139,12 +155,12 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
 
   const handleDelete = async (id) => {
     try {
-      // Optimistic delete
-      setInternalRawData(prev => prev.filter(t => t._id !== id));
-      await fetch(`${API_URL}/${id}`, { method: 'DELETE' });
+      // Optimistic delete lokal
+      setInternalRawData(prev => prev.filter(t => t._id !== id && t.localId !== id));
+      await deleteLocalTransaction(id);
       loadData();
     } catch (e) {
-      console.error('Gagal hapus transaksi:', e);
+      console.error('Gagal hapus transaksi lokal:', e);
     }
   };
 
@@ -368,83 +384,65 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
       payloads.push({ sheet: branchInfo.sheetName, tanggal: todayStr, cash: paymentMethod === 'Cash' ? totalCartPrice : 0, bca: paymentMethod === 'BCA' ? totalCartPrice : 0, gofood: paymentMethod === 'QRIS' ? totalCartPrice : 0, jenisPengeluaran: `[${qStr}${finalName}] ${itemsStr}`, totalPengeluaran: 0 });
     }
 
-    // --- OPTIMISTIC: Inject transaksi ke state lokal untuk update stok instan ---
-    const optimisticTx = {
-      _id: `optimistic_${Date.now()}`,
-      ...payloads[0],
-      createdAt: new Date().toISOString(),
-      isDeleted: false,
-    };
-    setInternalRawData(prev => [...prev, optimisticTx]);
+    // --- ATOMIC PERSISTENCE: Simpan transaksi ke IndexedDB lokal (<50ms) ---
+    const localRecord = await saveLocalTransaction(payloads[0]);
+
+    setInternalRawData(prev => [...prev, localRecord]);
 
     if (customerModal.type === 'BELUM_BAYAR') {
       const newOrder = {
-        ...transactionDataForPrint, id: Date.now(), dbId: null, status: 'BELUM_BAYAR',
-        rawCart: cart, rawCustomerName: customerName, rawPickupType: pickupType,
-        rawPickupCondition: pickupCondition, rawPickupTime: pickupTime,
-        rawOrderType: orderType, rawCabbage: cabbageOption, rawSambal: sambalOption, rawNote: orderNote,
+        ...transactionDataForPrint,
+        id: localRecord.localId || Date.now(),
+        localId: localRecord.localId,
+        dbId: null,
+        status: 'BELUM_BAYAR',
+        rawCart: cart,
+        rawCustomerName: customerName,
+        rawPickupType: pickupType,
+        rawPickupCondition: pickupCondition,
+        rawPickupTime: pickupTime,
+        rawOrderType: orderType,
+        rawCabbage: cabbageOption,
+        rawSambal: sambalOption,
+        rawNote: orderNote,
       };
       setLocalOrders(prev => [...prev, newOrder]);
+      saveLocalParkedOrder(newOrder).catch(console.warn);
     }
 
-    // --- OPTIMISTIC: Clear cart dan kembalikan UI instan ---
-    const savedCart = { ...cart };
-    setCart({}); setCustomerName(''); setAmountPaidStr('');
+    // --- UI INSTAN: Clear cart dan kembalikan UI instan ---
+    setCart({});
+    setCustomerName('');
+    setAmountPaidStr('');
     setCustomerModal({ isOpen: false, type: null });
-    setOrderType('Makan Sini'); setCabbageOption('Pake Kol Biasa'); setSambalOption('Pake Semua');
-    setOrderNote(''); setPickupType('Tidak Ada Keterangan'); setPickupCondition('Pagi'); setPickupTime('');
+    setOrderType('Makan Sini');
+    setCabbageOption('Pake Kol Biasa');
+    setSambalOption('Pake Semua');
+    setOrderNote('');
+    setPickupType('Tidak Ada Keterangan');
+    setPickupCondition('Pagi');
+    setPickupTime('');
     setPrintModal({ isOpen: true, data: transactionDataForPrint, printCount: 0 });
     setIsSubmitting(false);
 
-    // --- BACKGROUND: Kirim ke server ---
-    try {
-      const resTx = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payloads)
-      });
-      if (!resTx.ok) {
-        throw new Error(`HTTP Error ${resTx.status}`);
-      }
-      const resJson = await resTx.json();
-      if (resJson.status === 'error') {
-        throw new Error(resJson.message || 'Gagal menyimpan data');
-      }
-
-      // Update dbId untuk order parkir
-      if (customerModal.type === 'BELUM_BAYAR' && resJson.data?.[0]?._id) {
-        setLocalOrders(prev => prev.map(o =>
-          o.dbId === null && o.items === itemsStr
-            ? { ...o, dbId: resJson.data[0]._id }
-            : o
-        ));
-      }
-
-      loadData();
-    } catch (e) {
-      console.error('Gagal memproses transaksi ke server:', e);
-      // Hanya rollback jika data belum masuk
-      setInternalRawData(prev => prev.filter(t => t._id !== optimisticTx._id));
-      setCart(savedCart);
-      setStockAlert('⚠️ Koneksi server lambat/gagal. Silakan coba lagi.');
-      setTimeout(() => setStockAlert(null), 4000);
-    }
+    getSyncStats(branchInfo?.sheetName)
+      .then(s => setPendingSyncCount(s.pending))
+      .catch(() => {});
   };
 
   // --- MARK AS PAID ---
   const markAsPaid = async (orderId, selectedMethod) => {
     if (isSubmitting) return;
-    const order = localOrders.find(o => o.id === orderId);
+    const order = localOrders.find(o => o.id === orderId || o.localId === orderId);
     if (!order) return;
 
     setIsSubmitting(true);
 
-    // --- OPTIMISTIC UPDATE ---
     const cleanItemsStr = (order.items || '').replace(/,\s*\+\+\s*PAY:.*$/, '');
     const queueLabel = order.queue.split(' (Ambil:')[0];
     const finalJenisPengeluaran = `[${queueLabel}] ${cleanItemsStr}, ++ PAY:${selectedMethod}|${order.total}|0`;
 
-    const payload = [{
+    const payload = {
       sheet: branchInfo.sheetName,
       tanggal: todayStr,
       cash: selectedMethod === 'Cash' ? order.total : 0,
@@ -452,46 +450,37 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
       gofood: selectedMethod === 'QRIS' ? order.total : 0,
       jenisPengeluaran: finalJenisPengeluaran,
       totalPengeluaran: 0,
-      overrideDbId: order.dbId,
-    }];
+      overrideDbId: order.dbId || undefined,
+    };
+
+    if (order.localId) {
+      await updateLocalTransaction(order.localId, payload);
+    } else {
+      await saveLocalTransaction(payload);
+    }
 
     setInternalRawData(prev => prev.map(t =>
-      t._id === order.dbId ? { ...t, ...payload[0] } : t
+      (t.localId === order.localId || (order.dbId && t._id === order.dbId)) ? { ...t, ...payload } : t
     ));
-    setLocalOrders(prev => prev.filter(o => o.id !== orderId));
+    setLocalOrders(prev => prev.filter(o => o.id !== orderId && o.localId !== orderId));
+    deleteLocalParkedOrder(orderId).catch(console.warn);
     setIsSubmitting(false);
-
-    // --- BACKGROUND SYNC ---
-    try {
-      await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      loadData();
-    } catch (e) {
-      console.error('Gagal update pelunasan:', e);
-    }
+    loadData();
+    getSyncStats(branchInfo?.sheetName).then(s => setPendingSyncCount(s.pending)).catch(() => {});
   };
 
   // --- DELETE LOCAL ORDER ---
   const deleteLocalOrder = async (orderId) => {
-    const order = localOrders.find(o => o.id === orderId);
-
-    // --- OPTIMISTIC DELETE ---
-    setLocalOrders(prev => prev.filter(o => o.id !== orderId));
-    if (order && order.dbId) {
-      setInternalRawData(prev => prev.filter(t => t._id !== order.dbId));
-    }
-
-    // --- BACKGROUND SYNC ---
-    if (order && order.dbId) {
-      try {
-        await fetch(`${API_URL}/${order.dbId}`, { method: 'DELETE' });
-        loadData();
-      } catch (e) {
-        console.error('Gagal hapus transaksi lokal:', e);
+    const order = localOrders.find(o => o.id === orderId || o.localId === orderId);
+    setLocalOrders(prev => prev.filter(o => o.id !== orderId && o.localId !== orderId));
+    if (order) {
+      if (order.localId || order.dbId) {
+        setInternalRawData(prev => prev.filter(t => (order.localId ? t.localId !== order.localId : true) && (order.dbId ? t._id !== order.dbId : true)));
+        await deleteLocalTransaction(order.localId || order.dbId);
       }
+      await deleteLocalParkedOrder(orderId).catch(console.warn);
+      loadData();
+      getSyncStats(branchInfo?.sheetName).then(s => setPendingSyncCount(s.pending)).catch(() => {});
     }
   };
 
@@ -1134,6 +1123,25 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
               )}
             </div>
 
+            {/* SINKRONISASI CLOUD (TUTUP TOKO) */}
+            <button
+              onClick={() => setIsSyncModalOpen(true)}
+              className={`px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 font-extrabold text-xs active:scale-95 border ${
+                pendingSyncCount > 0
+                  ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 shadow-sm'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-sm'
+              }`}
+              title="Sinkronisasi Data Harian (Tutup Toko)"
+            >
+              <CloudUpload size={14} />
+              <span>Sync Cloud</span>
+              {pendingSyncCount > 0 && (
+                <span className="px-1.5 py-0.2 bg-white text-amber-700 rounded-full text-[10px] font-black">
+                  {pendingSyncCount}
+                </span>
+              )}
+            </button>
+
             {/* REFRESH */}
             <button
               onClick={handleRefresh}
@@ -1478,9 +1486,10 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
                 if (payMethodStr === 'BCA') badgeColor = 'bg-blue-50 text-blue-700 border-blue-200';
                 else if (payMethodStr === 'QRIS') badgeColor = 'bg-purple-50 text-purple-700 border-purple-200';
 
+                const itemIdentifier = item._id || item.localId;
                 return (
                   <div
-                    key={item._id}
+                    key={itemIdentifier}
                     onClick={() => setDetailModal({ isOpen: true, data: item })}
                     className="p-2.5 rounded-xl border bg-white border-gray-200 shadow-xs relative cursor-pointer hover:border-emerald-600 transition-all group flex flex-col gap-1.5"
                   >
@@ -1498,14 +1507,14 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
                             {item.printCount}x
                           </span>
                         )}
-                        {isDeletingId === item._id ? (
+                        {isDeletingId === itemIdentifier ? (
                           <Loader2 size={12} className="animate-spin text-red-500" />
-                        ) : deleteConfirm === item._id ? (
+                        ) : deleteConfirm === itemIdentifier ? (
                           <button
                             onClick={async (e) => {
                               e.stopPropagation();
-                              setIsDeletingId(item._id);
-                              await handleDelete(item._id);
+                              setIsDeletingId(itemIdentifier);
+                              await handleDelete(itemIdentifier);
                               setDeleteConfirm(null);
                               setIsDeletingId(null);
                             }}
@@ -1515,7 +1524,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
                           </button>
                         ) : (
                           <button
-                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm(item._id); }}
+                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm(itemIdentifier); }}
                             className="text-gray-300 hover:text-red-500 p-0.5 transition-colors"
                           >
                             <Trash2 size={13} />
@@ -1558,6 +1567,14 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
           </div>
         </div>
       </div>
+
+      {/* SYNC CLOUD MODAL */}
+      <SyncModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        sheetName={branchInfo?.sheetName}
+        onSyncComplete={loadData}
+      />
     </div>
   );
 }
