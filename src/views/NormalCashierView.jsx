@@ -1123,25 +1123,6 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
               )}
             </div>
 
-            {/* SINKRONISASI CLOUD (TUTUP TOKO) */}
-            <button
-              onClick={() => setIsSyncModalOpen(true)}
-              className={`px-3 py-2 rounded-xl transition-all flex items-center gap-1.5 font-extrabold text-xs active:scale-95 border ${
-                pendingSyncCount > 0
-                  ? 'bg-amber-500 hover:bg-amber-600 text-white border-amber-600 shadow-sm'
-                  : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-sm'
-              }`}
-              title="Sinkronisasi Data Harian (Tutup Toko)"
-            >
-              <CloudUpload size={14} />
-              <span>Sync Cloud</span>
-              {pendingSyncCount > 0 && (
-                <span className="px-1.5 py-0.2 bg-white text-amber-700 rounded-full text-[10px] font-black">
-                  {pendingSyncCount}
-                </span>
-              )}
-            </button>
-
             {/* REFRESH */}
             <button
               onClick={handleRefresh}

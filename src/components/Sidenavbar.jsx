@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Store, Zap, Pencil, LogOut, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react';
+import { Store, Zap, Pencil, CloudUpload, LogOut, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react';
 
 export default function Sidenavbar({ currentMode, onSwitchMode, onLogout }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
-  // Navigation items strictly 4 items as instructed (Normal Kasir, Fast Kasir, Edit Product, Logout)
+  // Navigation items: Kasir Normal, Fast Kasir, Edit Product, Sync Cloud, Logout
   const navItems = [
     {
       id: 'kasir_normal',
@@ -24,6 +24,12 @@ export default function Sidenavbar({ currentMode, onSwitchMode, onLogout }) {
       aliasIds: ['product_edit'],
       label: 'Edit Product',
       icon: Pencil,
+    },
+    {
+      id: 'sync_cloud',
+      aliasIds: ['sync_cloud'],
+      label: 'Sync Cloud',
+      icon: CloudUpload,
     },
   ];
 
@@ -102,7 +108,7 @@ export default function Sidenavbar({ currentMode, onSwitchMode, onLogout }) {
                 >
                   <Icon size={22} className="transition-transform group-hover:scale-110" />
                   <span className="text-[9px] font-extrabold tracking-wider leading-none opacity-90">
-                    {item.label === 'Kasir Normal' ? 'Kasir' : item.label === 'Fast Kasir' ? 'Fast' : 'Edit'}
+                    {item.label === 'Kasir Normal' ? 'Kasir' : item.label === 'Fast Kasir' ? 'Fast' : item.label === 'Edit Product' ? 'Edit' : 'Sync'}
                   </span>
 
                   {/* Active Left Pill Indicator */}

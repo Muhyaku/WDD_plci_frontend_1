@@ -467,15 +467,6 @@ export default function FastCashierView({ branchInfo, onLogout }) {
             <RefreshCw size={24} className={`mb-1 ${isFetching ? 'animate-spin' : ''}`} /> REFRESH
           </button>
 
-          {/* SYNC CLOUD BUTTON */}
-          <button onClick={() => setIsSyncModalOpen(true)} className={`font-black text-xs px-2 py-2 rounded-2xl flex flex-col items-center justify-center shrink-0 h-full shadow-sm active:scale-95 transition-all w-[85px] border ${
-            pendingSyncCount > 0 ? 'bg-amber-500 text-white border-amber-600 animate-pulse' : 'bg-emerald-600 text-white border-emerald-700'
-          }`}>
-            <CloudUpload size={24} className="mb-1" />
-            <span>SYNC CLOUD</span>
-            {pendingSyncCount > 0 && <span className="text-[10px] bg-white text-amber-800 px-1.5 py-0 rounded-full font-black mt-0.5">{pendingSyncCount}</span>}
-          </button>
-
           {/* TAHAN PESANAN LABEL */}
           <div className="bg-orange-50 text-orange-600 font-black text-xs px-4 py-2 rounded-2xl border border-orange-200 flex flex-col items-center justify-center shrink-0 h-full shadow-inner text-center w-[100px]">
             <Clock size={28} className="mb-1" /> TAHAN<br />PESANAN

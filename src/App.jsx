@@ -5,13 +5,14 @@
 // PIN 8080: Edit Product (Nama, Harga, Stok)
 // =============================================================================
 
-import React, { useState, Suspense } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
 import { BRANCH_CONFIG } from './shared/constants';
 
 import NormalCashierView from './views/NormalCashierView';
 import FastCashierView from './views/FastCashierView';
 import ProductEditView from './views/ProductEditView';
+import SyncView from './views/SyncView';
 
 import Sidenavbar from './components/Sidenavbar';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -149,6 +150,28 @@ export default function App() {
     }
   });
 
+  // AUTO FULLSCREEN EFFECT (Mode Layar Penuh Otomatis saat Buka App)
+  useEffect(() => {
+    const triggerFullscreen = () => {
+      try {
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+      } catch (e) {
+        // Abaikan jika tidak didukung browser
+      }
+    };
+
+    triggerFullscreen();
+    window.addEventListener('click', triggerFullscreen, { once: true });
+    window.addEventListener('touchstart', triggerFullscreen, { once: true });
+
+    return () => {
+      window.removeEventListener('click', triggerFullscreen);
+      window.removeEventListener('touchstart', triggerFullscreen);
+    };
+  }, []);
+
   const handleLogin = (branch) => {
     setBranchInfo(branch);
     setCurrentMode(branch.mode || 'kasir_normal');
@@ -170,7 +193,7 @@ export default function App() {
 
   return (
     <div className="flex h-[100dvh] w-full overflow-hidden bg-slate-900 font-sans">
-      {/* Sidenavbar (Strictly 4 Items with Hide/Show & Green Cabe Ijo Theme) */}
+      {/* Sidenavbar (Strictly Nav Items with Hide/Show & Green Cabe Ijo Theme) */}
       <Sidenavbar
         currentMode={currentMode}
         onSwitchMode={handleSwitchMode}
@@ -212,6 +235,13 @@ export default function App() {
             )}
             {currentMode === 'product_edit' && (
               <ProductEditView
+                branchInfo={branchInfo}
+                onLogout={handleLogout}
+                onSwitchMode={handleSwitchMode}
+              />
+            )}
+            {currentMode === 'sync_cloud' && (
+              <SyncView
                 branchInfo={branchInfo}
                 onLogout={handleLogout}
                 onSwitchMode={handleSwitchMode}
