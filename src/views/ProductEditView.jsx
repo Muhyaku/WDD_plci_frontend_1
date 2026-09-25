@@ -20,78 +20,24 @@ import {
 import {
   formatRupiah, getTodayStr, getBaseMenuList,
   calculateLiveStock, buildActiveMenuList,
+  fetchMenuData, fetchTodayTransactions,
 } from '../shared/utils';
 import {
-  getLocalMenuMaster,
-  saveLocalMenuMaster,
-  getLocalActivityLogs,
-  saveLocalActivityLogs,
-  getTodayLocalTransactions,
-  saveLocalTransactionsBatch,
   updateLocalMenuItem,
   addLocalActivityLog
 } from '../services/localDb';
 
 // =============================================================================
-// FETCH STRICT â€” Prioritas Local IndexedDB, Fallback Network saat Online
+// FETCH OFFLINE — Selalu Prioritas Pure Local IndexedDB
 // =============================================================================
 const fetchMenuDataStrict = async (sheetName) => {
-  // 1. Coba baca dari Local IndexedDB terlebih dahulu
-  const [localMenus, localLogs] = await Promise.all([
-    getLocalMenuMaster(sheetName).catch(() => []),
-    getLocalActivityLogs(sheetName).catch(() => [])
-  ]);
-
-  if (localMenus && localMenus.length > 0) {
-    return { masterMenus: localMenus, activityLogs: localLogs || [] };
-  }
-
-  // 2. Jika local belum ada dan ada internet, fetch dari server & simpan lokal
-  if (typeof navigator === 'undefined' || navigator.onLine) {
-    const [resMenu, resLog] = await Promise.all([
-      fetch(`${MENU_MASTER_URL}?sheet=${encodeURIComponent(sheetName)}`),
-      fetch(ACTIVITY_URL),
-    ]);
-
-    if (!resMenu.ok) throw new Error(`Gagal memuat Menu Master (HTTP ${resMenu.status})`);
-    if (!resLog.ok) throw new Error(`Gagal memuat Activity Log (HTTP ${resLog.status})`);
-
-    const menuData = await resMenu.json();
-    const logData = await resLog.json();
-
-    if (!Array.isArray(menuData)) throw new Error('Format data Menu Master tidak valid dari server');
-    if (!Array.isArray(logData)) throw new Error('Format data Activity Log tidak valid dari server');
-
-    await saveLocalMenuMaster(menuData).catch(console.warn);
-    await saveLocalActivityLogs(logData).catch(console.warn);
-
-    return { masterMenus: menuData, activityLogs: logData };
-  }
-
-  throw new Error('Data produk belum tersimpan di memori tablet dan perangkat sedang offline.');
+  return await fetchMenuData(sheetName);
 };
 
 const fetchTodayTransactionsStrict = async (sheetName) => {
-  const todayStr = getTodayStr();
-
-  // 1. Coba baca dari Local IndexedDB
-  const localTxs = await getTodayLocalTransactions(sheetName, todayStr).catch(() => []);
-  if (localTxs && localTxs.length > 0) {
-    return localTxs;
-  }
-
-  // 2. Jika local kosong dan online, coba ambil dari server & simpan lokal
-  if (typeof navigator === 'undefined' || navigator.onLine) {
-    const res = await fetch(`${API_URL}?sheet=${encodeURIComponent(sheetName)}&tanggal=${encodeURIComponent(todayStr)}`);
-    if (!res.ok) throw new Error(`Gagal memuat Transaksi Hari Ini (HTTP ${res.status})`);
-    const data = await res.json();
-    if (!Array.isArray(data)) throw new Error('Format data transaksi tidak valid dari server');
-    await saveLocalTransactionsBatch(data).catch(console.warn);
-    return data;
-  }
-
-  return [];
+  return await fetchTodayTransactions(sheetName);
 };
+
 
 // =============================================================================
 // DB ERROR SCREEN â€” Ditampilkan ketika koneksi database gagal
@@ -294,15 +240,6 @@ export default function ProductEditView({ branchInfo, onLogout }) {
           timestamp: new Date().toLocaleTimeString('id-ID'),
           dateString: todayStr
         }).catch(console.warn);
-      }
-
-      // 2. Jika online, kirim juga ke server di background
-      if (typeof navigator === 'undefined' || navigator.onLine) {
-        fetch(MENU_MASTER_URL, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }).catch(err => console.warn('[ProductEditView] Background server sync warning:', err));
       }
 
       setSubmitStatus('success');

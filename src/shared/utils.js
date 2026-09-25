@@ -324,29 +324,27 @@ export const fetchMenuData = async (sheetName) => {
       };
     }
 
-    // 2. Jika local DB masih kosong, fetch dari server & simpan lokal
-    if (typeof navigator === 'undefined' || navigator.onLine) {
-      const [resMenu, resLog] = await Promise.all([
-        fetch(`${MENU_MASTER_URL}?sheet=${encodeURIComponent(sheetName)}`).catch(() => null),
-        fetch(ACTIVITY_URL).catch(() => null),
-      ]);
-      const menuData = resMenu && resMenu.ok ? await resMenu.json() : [];
-      const logData = resLog && resLog.ok ? await resLog.json() : [];
+    // 2. Jika local DB masih kosong (App baru diinstall / First Run):
+    // Inisialisasi dari base catalog offline DENGAN STOK AWAL = 0!
+    // PURE OFFLINE: Tidak ada request ke server luar sama sekali.
+    const baseList = getBaseMenuList(sheetName);
+    const initialMasterMenus = baseList.map(item => ({
+      menuId: item.id,
+      name: item.name,
+      price: item.price,
+      category: item.category,
+      image: item.image,
+      sheet: sheetName,
+      stock: 0, // Seluruh produk baru mulai dari 0 stok!
+      hasVariants: item.hasVariants || undefined,
+    }));
 
-      if (Array.isArray(menuData) && menuData.length > 0) {
-        await saveLocalMenuMaster(menuData).catch(console.warn);
-      }
-      if (Array.isArray(logData) && logData.length > 0) {
-        await saveLocalActivityLogs(logData).catch(console.warn);
-      }
+    await saveLocalMenuMaster(initialMasterMenus).catch(console.warn);
 
-      return {
-        masterMenus: Array.isArray(menuData) ? menuData : [],
-        activityLogs: Array.isArray(logData) ? logData : [],
-      };
-    }
-
-    return { masterMenus: [], activityLogs: [] };
+    return {
+      masterMenus: initialMasterMenus,
+      activityLogs: [],
+    };
   } catch (e) {
     console.error('Error fetching menu data:', e);
     return { masterMenus: [], activityLogs: [] };
@@ -358,28 +356,14 @@ export const fetchTodayTransactions = async (sheetName) => {
   try {
     const todayStr = getTodayStr();
 
-    // 1. Coba baca dari Local IndexedDB
+    // PURE OFFLINE: Hanya baca dari Local IndexedDB tablet.
+    // Jika kosong (hari baru / setelah sync), return [] (0 transaksi).
+    // TIDAK PERNAH fetch transaksi lama dari server pada saat buka kasir harian.
     const localTxs = await getTodayLocalTransactions(sheetName, todayStr).catch(() => []);
-    if (localTxs && localTxs.length > 0) {
-      return localTxs;
-    }
-
-    // 2. Jika local DB masih kosong, coba fetch dari server & simpan lokal
-    if (typeof navigator === 'undefined' || navigator.onLine) {
-      const fetchUrl = `${API_URL}?sheet=${encodeURIComponent(sheetName)}&tanggal=${encodeURIComponent(todayStr)}`;
-      const res = await fetch(fetchUrl).catch(() => null);
-      if (res && res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          await saveLocalTransactionsBatch(data).catch(console.warn);
-          return data;
-        }
-      }
-    }
-
     return localTxs || [];
   } catch (e) {
     console.error('Error fetching today transactions:', e);
     return [];
   }
 };
+

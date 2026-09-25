@@ -565,3 +565,93 @@ export async function getSyncStats(sheetName) {
     req.onerror = () => reject(req.error);
   });
 }
+
+// =============================================================================
+// OFFLINE CLOSING & DAILY RESET FUNCTIONS (Reset ke 0 setelah Sync)
+// =============================================================================
+
+/**
+ * Menghapus seluruh data transaksi lokal dari IndexedDB tablet
+ */
+export async function clearLocalTransactions(sheetName) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES.TRANSACTIONS, 'readwrite');
+    const store = tx.objectStore(STORES.TRANSACTIONS);
+    const req = store.clear();
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Menghapus seluruh log aktivitas lokal dari IndexedDB tablet
+ */
+export async function clearLocalActivityLogs(sheetName) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES.ACTIVITY_LOGS, 'readwrite');
+    const store = tx.objectStore(STORES.ACTIVITY_LOGS);
+    const req = store.clear();
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Menghapus seluruh pesanan parkir / belum bayar lokal dari tablet
+ */
+export async function clearLocalParkedOrders(sheetName) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES.PARKED_ORDERS, 'readwrite');
+    const store = tx.objectStore(STORES.PARKED_ORDERS);
+    const req = store.clear();
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Mereset stok seluruh menu master menjadi 0!
+ * PENTING: Nama produk, harga jual, kategori, gambar TETAP DIPERTAHANKAN.
+ */
+export async function resetLocalMenuStock(sheetName) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES.MENU_MASTER, 'readwrite');
+    const store = tx.objectStore(STORES.MENU_MASTER);
+    const req = store.getAll();
+
+    req.onsuccess = () => {
+      const records = req.result || [];
+      records.forEach(item => {
+        if (!sheetName || !item.sheet || item.sheet === sheetName) {
+          item.stock = 0;
+          store.put(item);
+        }
+      });
+      tx.oncomplete = () => resolve(records.length);
+    };
+
+    req.onerror = () => reject(req.error);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+/**
+ * Reset menyeluruh harian kasir lokal (Closing Store Reset)
+ * 1. Mengosongkan transaksi lokal (karena sudah ditransfer seutuhnya ke cloud MongoDB)
+ * 2. Mengosongkan activity logs lokal
+ * 3. Mengosongkan parked orders lokal
+ * 4. Mereset stok menu lokal ke 0 (nama & harga tetap aman)
+ */
+export async function resetLocalDailyState(sheetName) {
+  await Promise.all([
+    clearLocalTransactions(sheetName),
+    clearLocalActivityLogs(sheetName),
+    clearLocalParkedOrders(sheetName),
+    resetLocalMenuStock(sheetName)
+  ]);
+  return { success: true };
+}
