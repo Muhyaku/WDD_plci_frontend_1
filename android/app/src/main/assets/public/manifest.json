@@ -1,0 +1,15 @@
+{
+  "short_name": "POS Kasir",
+  "name": "POS Kasir",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "start_url": "/",
+  "display": "fullscreen",
+  "theme_color": "#111827",
+  "background_color": "#ffffff"
+}
