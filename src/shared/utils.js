@@ -225,7 +225,16 @@ export const calculateLiveStock = (rawData, activityLogs, masterMenus, baseMenuL
     }
   });
 
-  // 6. Hitung total input log per stockRefId (hanya dari base menu)
+  // 6. Tentukan total stok input per stockRefId (hanya dari base menu)
+  //
+  // PENDEKATAN: Selalu gunakan dbStock dari MENU_MASTER sebagai baseline.
+  // dbStock adalah sumber kebenaran yang paling akurat karena selalu di-update oleh
+  // updateLocalMenuItem() pada setiap:
+  //   - Konfirmasi stok awal (initial confirm)
+  //   - Penyesuaian stok (+ / - via recordStockAdjustment)
+  //
+  // Activity logs hanya dipakai untuk audit trail & riwayat, BUKAN untuk kalkulasi stok.
+  // Kalkulasi berbasis log tidak reliable karena urutan log tidak selalu chronological.
   const inputMap = {};
   const uniqueBaseMenus = [];
   activeMenus.forEach(m => {
@@ -236,36 +245,8 @@ export const calculateLiveStock = (rawData, activityLogs, masterMenus, baseMenuL
 
   uniqueBaseMenus.forEach(baseMenu => {
     const refId = baseMenu.stockRefId;
-    const baseItemObj = baseMenuList.find(b => b.id === baseMenu.id);
-    const defaultName = baseItemObj ? baseItemObj.name.toLowerCase() : '';
-    const currentName = baseMenu.name ? baseMenu.name.toLowerCase() : '';
-
-    const itemLogs = targetLogs.filter(log => {
-      const logName = (log.menuName || '').toLowerCase();
-      return (logName === currentName) ||
-        (defaultName && logName === defaultName) ||
-        (currentName && logName.includes(currentName)) ||
-        (defaultName && logName.includes(defaultName));
-    });
-
-    if (itemLogs.length > 0) {
-      // Ambil nilai newVal dari LOG TERAKHIR sebagai basis stok terkini setelah semua adjustments.
-      // Ini lebih akurat dibanding sum-of-diffs karena:
-      // - Konfirmasi stok awal (initial) TIDAK membuat log → sum-of-diffs mulai dari 0 dan hanya
-      //   menghitung delta, bukan total stok → menyebabkan stok jadi HABIS.
-      // - Log terakhir SELALU mencerminkan "menjadi [X]" yang merupakan stok total setelah adjustment.
-      let latestStock = baseMenu.dbStock; // fallback ke dbStock jika parsing gagal
-      itemLogs.forEach(log => {
-        const match = log.detailAction.match(/menjadi \[(\d+)\]/);
-        if (match) {
-          latestStock = parseInt(match[1], 10);
-        }
-      });
-      inputMap[refId] = latestStock;
-    } else {
-      // Tidak ada log restock hari ini → dbStock adalah stok awal yang di-set via Edit Product.
-      inputMap[refId] = baseMenu.dbStock;
-    }
+    // dbStock selalu up-to-date: stok total input setelah semua adjustment, sebelum dikurangi penjualan.
+    inputMap[refId] = baseMenu.dbStock;
   });
 
   // 7. Hitung sisa akhir live: Input Modal - Terjual Laku
