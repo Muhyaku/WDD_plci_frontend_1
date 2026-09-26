@@ -109,6 +109,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
     tempName: '',
     tempPrice: '',
     tempStock: '',
+    originalStock: 0,
     isConfirmed: false,
     stokAwal: 0,
     dailyStockRecord: null,
@@ -197,9 +198,6 @@ export default function ProductEditView({ branchInfo, onLogout }) {
 
     const isConfirmed = Boolean(dailyStock && dailyStock.isConfirmed);
     const stokAwal = dailyStock ? dailyStock.stokAwal : stockLive;
-    const currentTotal = dailyStock
-      ? (dailyStock.totalStokInput !== undefined ? dailyStock.totalStokInput : stockLive)
-      : stockLive;
 
     setEditModal({
       isOpen: true,
@@ -207,7 +205,8 @@ export default function ProductEditView({ branchInfo, onLogout }) {
       dbItem: dbRow,
       tempName:  nameFromDb,
       tempPrice: new Intl.NumberFormat('id-ID').format(priceFromDb),
-      tempStock: String(currentTotal),
+      tempStock: String(stockLive), // Tampilkan stok live terkini saat modal dibuka
+      originalStock: stockLive,     // Simpan stok acuan saat modal dibuka
       isConfirmed,
       stokAwal,
       dailyStockRecord: dailyStock,
@@ -216,53 +215,20 @@ export default function ProductEditView({ branchInfo, onLogout }) {
   };
 
   // =============================================================================
-  // HANDLE ADJUST STOCK (+ / -) DENGAN PENCATATAN HISTORI AUDIT
+  // HANDLE ADJUST STOCK (+ / -) SEMENTARA DI MODAL (BELUM KE DB HINGGA CONFIRM)
   // =============================================================================
-  const handleAdjustStock = async (delta) => {
+  const handleAdjustStockTemp = (delta) => {
     if (!editModal.item || isSubmitting) return;
     const currentVal = parseInt(editModal.tempStock) || 0;
     const newVal = Math.max(0, currentVal + delta);
-    const type = delta > 0 ? 'penambahan' : 'pengurangan';
-
-    try {
-      const updatedDaily = await recordStockAdjustment({
-        sheet: branchInfo.sheetName,
-        tanggal: todayStr,
-        menuId: editModal.item.id,
-        menuName: editModal.tempName,
-        category: editModal.item.category,
-        delta,
-        type,
-        currentStock: currentVal
-      });
-
-      await addLocalActivityLog({
-        sheet: branchInfo.sheetName,
-        actionCategory: 'UBAH_STOK',
-        menuName: editModal.tempName,
-        detailAction: `PENYESUAIAN STOK (${delta > 0 ? `+${delta}` : delta}): Mengubah stok dari [${currentVal}] menjadi [${newVal}] porsi.`,
-        timestamp: new Date().toLocaleTimeString('id-ID'),
-        dateString: todayStr
-      }).catch(console.warn);
-
-      setEditModal(prev => ({
-        ...prev,
-        tempStock: String(newVal),
-        dailyStockRecord: updatedDaily,
-        isConfirmed: true,
-        stokAwal: updatedDaily.stokAwal
-      }));
-
-      // Refresh data di background agar live list ter-update
-      loadData(true);
-    } catch (err) {
-      console.error('Error adjusting stock:', err);
-      showToast('error', 'Gagal mengubah stok: ' + err.message);
-    }
+    setEditModal(prev => ({
+      ...prev,
+      tempStock: String(newVal)
+    }));
   };
 
   // =============================================================================
-  // SAVE — Simpan Nama, Harga, & Konfirmasi Stok Awal
+  // SAVE — Simpan Nama, Harga, Konfirmasi Stok Awal & Catat Histori Per Sesi
   // =============================================================================
   const saveMasterMenu = async () => {
     if (isSubmitting || !editModal.item) return;
@@ -270,6 +236,8 @@ export default function ProductEditView({ branchInfo, onLogout }) {
     const newPrice = parseInt(editModal.tempPrice.replace(/\D/g, '')) || 0;
     const newStock = parseInt(editModal.tempStock);
     const newName  = editModal.tempName.trim();
+    const originalStock = parseInt(editModal.originalStock) || 0;
+    const netDelta = newStock - originalStock;
 
     if (!newName) { showToast('error', '⚠️ Nama produk tidak boleh kosong!'); return; }
     if (isNaN(newStock) || newStock < 0) { showToast('error', '⚠️ Stok harus berupa angka ≥ 0!'); return; }
@@ -287,10 +255,11 @@ export default function ProductEditView({ branchInfo, onLogout }) {
         lastUpdatedDate: todayStr,
       });
 
-      // 2. Jika bukan paketan, catat / konfirmasi stok awal di DailyStock jika belum confirmed
+      // 2. Jika bukan paketan, kelola rekaman DailyStock
       if (editModal.item.category !== 'Paketan') {
         const existingDaily = editModal.dailyStockRecord;
         if (!existingDaily || !existingDaily.isConfirmed) {
+          // A. Konfirmasi Stok Awal pertama kali
           await saveDailyStock({
             sheet: branchInfo.sheetName,
             tanggal: todayStr,
@@ -303,26 +272,47 @@ export default function ProductEditView({ branchInfo, onLogout }) {
             history: [],
             totalStokInput: newStock
           });
-        }
-      }
+        } else if (netDelta !== 0) {
+          // B. Catat histori penyesuaian PER CONFIRM (Hanya 1 entri per sesi konfirmasi!)
+          await recordStockAdjustment({
+            sheet: branchInfo.sheetName,
+            tanggal: todayStr,
+            menuId: editModal.item.id,
+            menuName: newName,
+            category: editModal.item.category,
+            delta: netDelta,
+            type: netDelta > 0 ? 'penambahan' : 'pengurangan',
+            currentStock: originalStock,
+            newStockAfter: newStock
+          });
 
-      // Catat log aktivitas lokal jika stok berubah
-      if (editModal.item.stock !== newStock) {
-        await addLocalActivityLog({
-          sheet: branchInfo.sheetName,
-          actionCategory: 'UBAH_STOK',
-          menuName: newName,
-          detailAction: `MANUAL UPDATE: Mengubah Stok dari [${editModal.item.stock || 0}] menjadi [${newStock}] porsi.`,
-          timestamp: new Date().toLocaleTimeString('id-ID'),
-          dateString: todayStr
-        }).catch(console.warn);
+          await addLocalActivityLog({
+            sheet: branchInfo.sheetName,
+            actionCategory: 'UBAH_STOK',
+            menuName: newName,
+            detailAction: `PENYESUAIAN STOK (${netDelta > 0 ? `+${netDelta}` : netDelta}): Mengubah stok dari [${originalStock}] menjadi [${newStock}] porsi.`,
+            timestamp: new Date().toLocaleTimeString('id-ID'),
+            dateString: todayStr
+          }).catch(console.warn);
+        }
       }
 
       setSubmitStatus('success');
 
       // Tutup modal setelah feedback visual singkat
       setTimeout(() => {
-        setEditModal({ isOpen: false, item: null, dbItem: null, tempName: '', tempPrice: '', tempStock: '', isConfirmed: false, stokAwal: 0, dailyStockRecord: null });
+        setEditModal({
+          isOpen: false,
+          item: null,
+          dbItem: null,
+          tempName: '',
+          tempPrice: '',
+          tempStock: '',
+          originalStock: 0,
+          isConfirmed: false,
+          stokAwal: 0,
+          dailyStockRecord: null
+        });
         setSubmitStatus(null);
       }, 700);
 
@@ -340,7 +330,18 @@ export default function ProductEditView({ branchInfo, onLogout }) {
 
   const closeModal = () => {
     if (isSubmitting) return;
-    setEditModal({ isOpen: false, item: null, dbItem: null, tempName: '', tempPrice: '', tempStock: '', isConfirmed: false, stokAwal: 0, dailyStockRecord: null });
+    setEditModal({
+      isOpen: false,
+      item: null,
+      dbItem: null,
+      tempName: '',
+      tempPrice: '',
+      tempStock: '',
+      originalStock: 0,
+      isConfirmed: false,
+      stokAwal: 0,
+      dailyStockRecord: null
+    });
     setSubmitStatus(null);
   };
 
@@ -512,162 +513,183 @@ export default function ProductEditView({ branchInfo, onLogout }) {
         </div>
       </div>
 
-      {/* ===== EDIT MODAL (HEADER POPUP DIHAPUS SEPENUHNYA SESUAI REQUIREMENT 4A) ===== */}
-      {editModal.isOpen && (
-        <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[200] flex items-center justify-center animate-in fade-in p-4">
-          <div className="bg-white rounded-[2rem] shadow-2xl max-w-[896px] w-[95vw] sm:w-full border border-gray-100 animate-in zoom-in-95 overflow-hidden max-h-[90dvh] flex flex-col">
+      {/* ===== EDIT MODAL (RESPONSIVE MAX-W-MD, HEADER DIHAPUS, PER-CONFIRM HISTORY) ===== */}
+      {editModal.isOpen && (() => {
+        const originalStock = parseInt(editModal.originalStock) || 0;
+        const currentTempStock = parseInt(editModal.tempStock) || 0;
+        const sessionDelta = currentTempStock - originalStock;
 
-            {/* Modal Body */}
-            <div className="p-6 space-y-5 flex-1 overflow-y-auto">
+        return (
+          <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[200] flex items-center justify-center animate-in fade-in p-3 sm:p-5">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full border border-gray-100 animate-in zoom-in-95 overflow-hidden max-h-[92dvh] flex flex-col">
 
-              {/* Nama */}
-              <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Nama Produk</label>
-                <input
-                  type="text"
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-gray-900 outline-none focus:border-blue-400 focus:bg-white transition-all"
-                  value={editModal.tempName}
-                  onChange={e => setEditModal(prev => ({ ...prev, tempName: e.target.value }))}
-                  onKeyDown={e => e.key === 'Enter' && saveMasterMenu()}
-                />
-              </div>
+              {/* Modal Body */}
+              <div className="p-5 sm:p-6 space-y-4 sm:space-y-5 flex-1 overflow-y-auto">
 
-              {/* Harga */}
-              <div>
-                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Harga Jual</label>
-                <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">Rp</span>
+                {/* Nama */}
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Nama Produk</label>
                   <input
                     type="text"
-                    inputMode="numeric"
-                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-lg text-gray-900 outline-none focus:border-blue-400 focus:bg-white transition-all"
-                    value={editModal.tempPrice}
-                    onChange={e => {
-                      const raw = e.target.value.replace(/\D/g, '');
-                      setEditModal(prev => ({ ...prev, tempPrice: raw ? new Intl.NumberFormat('id-ID').format(raw) : '' }));
-                    }}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-gray-900 outline-none focus:border-blue-400 focus:bg-white transition-all"
+                    value={editModal.tempName}
+                    onChange={e => setEditModal(prev => ({ ...prev, tempName: e.target.value }))}
                     onKeyDown={e => e.key === 'Enter' && saveMasterMenu()}
                   />
                 </div>
-              </div>
 
-              {/* Stok */}
-              <div
-                className={`p-4 rounded-xl border relative transition-all ${
-                  editModal.item?.category === 'Paketan' ? 'bg-slate-100 border-slate-300' : 'bg-green-50 border-green-100'
-                }`}
-              >
-                <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 flex items-center gap-1.5 ${
-                  editModal.item?.category === 'Paketan' ? 'text-slate-400' : 'text-green-700'
-                }`}>
-                  {editModal.item?.category === 'Paketan' ? (
-                    <><Lock size={11} /> Stok Terkunci (Ikut Satuan)</>
-                  ) : editModal.isConfirmed ? (
-                    <><Lock size={11} /> Stok Awal Terkunci ({editModal.stokAwal})</>
-                  ) : (
-                    'Stok Produk'
-                  )}
-                </label>
-
-                {editModal.item?.category === 'Paketan' ? (
-                  <input
-                    type="number"
-                    readOnly
-                    disabled
-                    className="w-full px-4 py-3 border rounded-xl font-black text-2xl text-center bg-slate-200 border-slate-300 text-slate-400 pointer-events-none"
-                    value={editModal.tempStock}
-                  />
-                ) : editModal.isConfirmed ? (
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleAdjustStock(-1)}
-                        className="w-14 h-14 bg-red-100 hover:bg-red-200 active:scale-90 text-red-700 font-black text-2xl rounded-2xl flex items-center justify-center transition-all border border-red-200 cursor-pointer shadow-xs shrink-0 select-none"
-                        title="Kurangi stok 1 (-1)"
-                      >
-                        <Minus size={22} />
-                      </button>
-                      <input
-                        type="number"
-                        readOnly
-                        disabled
-                        className="flex-1 px-4 py-3 border rounded-xl font-black text-2xl text-center bg-white border-green-300 text-gray-900 cursor-not-allowed select-none shadow-inner"
-                        value={editModal.tempStock}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleAdjustStock(1)}
-                        className="w-14 h-14 bg-emerald-600 hover:bg-emerald-700 active:scale-90 text-white font-black text-2xl rounded-2xl flex items-center justify-center transition-all shadow-md shadow-emerald-700/20 cursor-pointer shrink-0 select-none"
-                        title="Tambah stok 1 (+1)"
-                      >
-                        <Plus size={22} />
-                      </button>
-                    </div>
-                    {editModal.dailyStockRecord && editModal.dailyStockRecord.history && editModal.dailyStockRecord.history.length > 0 && (
-                      <div className="mt-2.5 text-[10px] text-gray-600 font-semibold bg-white/90 p-2.5 rounded-xl border border-green-200 max-h-24 overflow-y-auto">
-                        <span className="font-bold text-gray-800">Histori Penyesuaian (+ / -):</span>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {editModal.dailyStockRecord.history.map((h, idx) => (
-                            <span key={idx} className={`px-2 py-0.5 rounded-md text-[10px] font-black ${h.delta > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
-                              {h.delta > 0 ? `+${h.delta}` : h.delta} ({h.time})
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div>
+                {/* Harga */}
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Harga Jual</label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">Rp</span>
                     <input
-                      type="number"
-                      min="0"
-                      className="w-full px-4 py-3 border rounded-xl font-black text-2xl text-center bg-white border-green-200 focus:border-green-500 text-gray-900 outline-none"
-                      value={editModal.tempStock}
-                      onChange={e => setEditModal(prev => ({ ...prev, tempStock: e.target.value }))}
-                      placeholder="Input stok awal..."
+                      type="text"
+                      inputMode="numeric"
+                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-lg text-gray-900 outline-none focus:border-blue-400 focus:bg-white transition-all"
+                      value={editModal.tempPrice}
+                      onChange={e => {
+                        const raw = e.target.value.replace(/\D/g, '');
+                        setEditModal(prev => ({ ...prev, tempPrice: raw ? new Intl.NumberFormat('id-ID').format(raw) : '' }));
+                      }}
                       onKeyDown={e => e.key === 'Enter' && saveMasterMenu()}
                     />
-                    <p className="text-[11px] text-green-700 font-bold mt-1.5">
-                      Input stok awal pagi hari. Simpan akan mengonfirmasi & mengunci kolom input ini.
-                    </p>
                   </div>
-                )}
+                </div>
+
+                {/* Stok */}
+                <div
+                  className={`p-4 rounded-2xl border relative transition-all ${
+                    editModal.item?.category === 'Paketan' ? 'bg-slate-100 border-slate-300' : 'bg-green-50 border-green-100'
+                  }`}
+                >
+                  <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 flex items-center gap-1.5 ${
+                    editModal.item?.category === 'Paketan' ? 'text-slate-400' : 'text-green-700'
+                  }`}>
+                    {editModal.item?.category === 'Paketan' ? (
+                      <><Lock size={11} /> Stok Terkunci (Ikut Satuan)</>
+                    ) : editModal.isConfirmed ? (
+                      <><Lock size={11} /> Stok Awal Terkunci ({editModal.stokAwal})</>
+                    ) : (
+                      'Stok Produk'
+                    )}
+                  </label>
+
+                  {editModal.item?.category === 'Paketan' ? (
+                    <input
+                      type="number"
+                      readOnly
+                      disabled
+                      className="w-full px-4 py-3 border rounded-xl font-black text-2xl text-center bg-slate-200 border-slate-300 text-slate-400 pointer-events-none"
+                      value={editModal.tempStock}
+                    />
+                  ) : editModal.isConfirmed ? (
+                    <div>
+                      <div className="flex items-center gap-2 sm:gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleAdjustStockTemp(-1)}
+                          disabled={parseInt(editModal.tempStock) <= 0}
+                          className="w-13 h-13 sm:w-14 sm:h-14 bg-red-100 hover:bg-red-200 active:scale-90 text-red-700 font-black text-2xl rounded-2xl flex items-center justify-center transition-all border border-red-200 cursor-pointer shadow-xs shrink-0 select-none disabled:opacity-40"
+                          title="Kurangi stok 1 (-1)"
+                        >
+                          <Minus size={22} />
+                        </button>
+                        <input
+                          type="number"
+                          readOnly
+                          disabled
+                          className="flex-1 px-4 py-3 border rounded-2xl font-black text-2xl text-center bg-white border-green-300 text-gray-900 cursor-not-allowed select-none shadow-inner"
+                          value={editModal.tempStock}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleAdjustStockTemp(1)}
+                          className="w-13 h-13 sm:w-14 sm:h-14 bg-emerald-600 hover:bg-emerald-700 active:scale-90 text-white font-black text-2xl rounded-2xl flex items-center justify-center transition-all shadow-md shadow-emerald-700/20 cursor-pointer shrink-0 select-none"
+                          title="Tambah stok 1 (+1)"
+                        >
+                          <Plus size={22} />
+                        </button>
+                      </div>
+
+                      {/* Banner perubahan di sesi ini (belum disimpan sampai klik tombol simpan) */}
+                      {sessionDelta !== 0 && (
+                        <div className={`mt-2.5 p-2.5 rounded-xl border text-xs font-bold flex items-center justify-between animate-in fade-in ${
+                          sessionDelta > 0 ? 'bg-emerald-100/80 text-emerald-900 border-emerald-300' : 'bg-red-100/80 text-red-900 border-red-300'
+                        }`}>
+                          <span>Perubahan sesi ini:</span>
+                          <span className="font-black text-sm">{sessionDelta > 0 ? `+${sessionDelta}` : sessionDelta} porsi</span>
+                        </div>
+                      )}
+
+                      {/* Riwayat yang sudah pernah dikonfirmasi sebelumnya */}
+                      {editModal.dailyStockRecord && editModal.dailyStockRecord.history && editModal.dailyStockRecord.history.length > 0 && (
+                        <div className="mt-2.5 text-[10px] text-gray-600 font-semibold bg-white/90 p-2.5 rounded-xl border border-green-200 max-h-24 overflow-y-auto">
+                          <span className="font-bold text-gray-800 block mb-1">Riwayat Penyesuaian Tersimpan:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {editModal.dailyStockRecord.history.map((h, idx) => (
+                              <span key={idx} className={`px-2 py-0.5 rounded-md text-[10px] font-black ${h.delta > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                                {h.time} • {h.delta > 0 ? `+${h.delta}` : h.delta}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <input
+                        type="number"
+                        min="0"
+                        className="w-full px-4 py-3 border rounded-xl font-black text-2xl text-center bg-white border-green-200 focus:border-green-500 text-gray-900 outline-none"
+                        value={editModal.tempStock}
+                        onChange={e => setEditModal(prev => ({ ...prev, tempStock: e.target.value }))}
+                        placeholder="Input stok awal..."
+                        onKeyDown={e => e.key === 'Enter' && saveMasterMenu()}
+                      />
+                      <p className="text-[11px] text-green-700 font-bold mt-1.5">
+                        Input stok awal pagi hari. Simpan akan mengonfirmasi & mengunci kolom input ini.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-5 sm:px-6 pb-5 sm:pb-6 pt-2 flex gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  disabled={isSubmitting}
+                  className="flex-1 py-3.5 bg-slate-100 text-slate-600 font-bold rounded-xl hover:bg-slate-200 transition-colors disabled:opacity-50 text-xs sm:text-sm cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={saveMasterMenu}
+                  disabled={isSubmitting || submitStatus === 'success'}
+                  className={`flex-[2] py-3.5 text-white font-black rounded-xl transition-all active:scale-95 shadow-md disabled:opacity-50 flex items-center justify-center gap-2 border-b-4 text-xs sm:text-sm cursor-pointer ${
+                    submitStatus === 'success' ? 'bg-green-500 border-green-700'
+                    : submitStatus === 'error' ? 'bg-red-500 border-red-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-800'
+                  }`}
+                >
+                  {isSubmitting ? (
+                    <><Loader2 size={16} className="animate-spin" /> Menyimpan...</>
+                  ) : submitStatus === 'success' ? (
+                    <><CheckCircle2 size={16} /> Tersimpan!</>
+                  ) : submitStatus === 'error' ? (
+                    <><AlertCircle size={16} /> Gagal! Coba Lagi</>
+                  ) : (
+                    <><Save size={16} /> {editModal.isConfirmed ? 'SIMPAN PERUBAHAN' : 'KONFIRMASI STOK AWAL'}</>
+                  )}
+                </button>
               </div>
             </div>
-
-            {/* Modal Footer */}
-            <div className="px-6 pb-6 pt-2 flex gap-3 shrink-0">
-              <button
-                onClick={closeModal}
-                disabled={isSubmitting}
-                className="flex-1 py-4 bg-slate-100 text-slate-500 font-bold rounded-xl hover:bg-slate-200 transition-colors disabled:opacity-50"
-              >
-                Batal
-              </button>
-              <button
-                onClick={saveMasterMenu}
-                disabled={isSubmitting || submitStatus === 'success'}
-                className={`flex-[2] py-4 text-white font-black rounded-xl transition-all active:scale-95 shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 border-b-4 ${
-                  submitStatus === 'success' ? 'bg-green-500 border-green-700'
-                  : submitStatus === 'error' ? 'bg-red-500 border-red-700'
-                  : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-800'
-                }`}
-              >
-                {isSubmitting ? (
-                  <><Loader2 size={18} className="animate-spin" /> Menyimpan...</>
-                ) : submitStatus === 'success' ? (
-                  <><CheckCircle2 size={18} /> Tersimpan!</>
-                ) : submitStatus === 'error' ? (
-                  <><AlertCircle size={18} /> Gagal! Coba Lagi</>
-                ) : (
-                  <><Save size={18} /> {editModal.isConfirmed ? 'SIMPAN PERUBAHAN' : 'KONFIRMASI STOK AWAL'}</>
-                )}
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

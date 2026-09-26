@@ -735,7 +735,7 @@ export async function saveDailyStock(data) {
  * Mencatat penyesuaian stok (+ atau -) ke histori stok harian
  * sekaligus mengupdate stok live di MENU_MASTER!
  */
-export async function recordStockAdjustment({ sheet, tanggal, menuId, menuName, category, delta, type, currentStock }) {
+export async function recordStockAdjustment({ sheet, tanggal, menuId, menuName, category, delta, type, currentStock, newStockAfter: liveStockAfter }) {
   const id = `${sheet}_${tanggal}_${menuId}`;
   const now = new Date();
   const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
@@ -758,18 +758,20 @@ export async function recordStockAdjustment({ sheet, tanggal, menuId, menuName, 
   }
 
   const baseInput = existing.totalStokInput !== undefined ? existing.totalStokInput : (existing.stokAwal || 0);
-  const newStockAfter = Math.max(0, baseInput + delta);
+  const newTotalInput = Math.max(0, baseInput + delta);
+  const finalLiveStock = liveStockAfter !== undefined ? liveStockAfter : newTotalInput;
+
   const adjustmentEntry = {
     delta,
     type, // 'penambahan' | 'pengurangan'
     time: timeStr,
     timestamp: now.toISOString(),
-    currentStockAfter: newStockAfter,
+    currentStockAfter: finalLiveStock,
     note: `${type === 'penambahan' ? 'Tambah' : 'Kurang'} via Kasir`
   };
 
   existing.history = Array.isArray(existing.history) ? [...existing.history, adjustmentEntry] : [adjustmentEntry];
-  existing.totalStokInput = newStockAfter;
+  existing.totalStokInput = newTotalInput;
   existing.updatedAt = now.toISOString();
 
   await withStore(STORES.DAILY_STOCKS, 'readwrite', (store) => {
@@ -778,7 +780,7 @@ export async function recordStockAdjustment({ sheet, tanggal, menuId, menuName, 
 
   // Sinkronkan juga stok ke MENU_MASTER lokal
   await updateLocalMenuItem(menuId, {
-    stock: newStockAfter,
+    stock: finalLiveStock,
     lastUpdatedDate: tanggal
   });
 
