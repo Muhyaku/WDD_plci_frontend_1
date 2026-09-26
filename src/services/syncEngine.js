@@ -11,6 +11,7 @@
 // =============================================================================
 
 import { API_URL, ACTIVITY_URL, BACKEND_BASE_URL } from '../shared/constants';
+import { getTodayStr } from '../shared/utils';
 import {
   getPendingTransactions,
   getLocalActivityLogs,
@@ -156,7 +157,9 @@ async function uploadAllPendingData(sheetName, onProgress = () => {}) {
 
   // 5. Transfer Data Stok Harian & Riwayat Penyesuaian (+/-) ke MongoDB
   try {
-    const todayStr = new Date().toISOString().split('T')[0];
+    // PENTING: gunakan getTodayStr() agar format tanggal cocok dengan yang disimpan di IndexedDB
+    // (format Indonesia "Sabtu, 27 September 2026", BUKAN ISO "2026-09-27")
+    const todayStr = getTodayStr();
     const dailyStocks = await getAllDailyStocks(sheetName, todayStr);
     if (dailyStocks && dailyStocks.length > 0) {
       onProgress(90, pendingTx.length || 1, 'Mentransfer data stok & histori perubahan ke MongoDB...');
