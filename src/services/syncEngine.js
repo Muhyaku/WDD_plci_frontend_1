@@ -4,16 +4,17 @@
 //
 // Karakteristik:
 // 1. One-Way Transfer: Mentransfer seluruh data harian dari internal tablet ke MongoDB.
-// 2. Daily Local Purge: Setelah data sukses diterima MongoDB, seluruh data transaksi,
-//    activity logs, dan stok lokal DI-RESET KE 0 (nama & harga produk tetap aman).
-// 3. Chunking Safety: Membagi pengiriman transaksi menjadi batch aman (25 item/request).
-// 4. Zero Lag & Peak Performance: Tablet selalu bersih dari akumulasi beban data lama.
+// 2. Preserved Creation Timestamp: Membawa timestamp asli kasir saat transaksi diinput.
+// 3. Structured Items Preservation: Membawa daftar item & quantity per transaksi.
+// 4. Daily Stock & Audit Trail Upload: Mentransfer stok awal & histori penyesuaian (+/-).
+// 5. Dual Action: "Kirim Data" (transfer saja) & "Tutup Toko" (transfer + reset ke 0).
 // =============================================================================
 
 import { API_URL, ACTIVITY_URL, BACKEND_BASE_URL } from '../shared/constants';
 import {
   getPendingTransactions,
   getLocalActivityLogs,
+  getAllDailyStocks,
   resetLocalDailyState,
   getSyncStats
 } from './localDb';
@@ -51,21 +52,18 @@ export async function checkServerConnection() {
 }
 
 /**
- * Menjalankan proses sinkronisasi tutup toko:
- * 1. Kirim seluruh transaksi lokal ke MongoDB
- * 2. Kirim seluruh log aktivitas harian ke MongoDB
- * 3. Kosongkan data lokal tablet (reset ke 0) agar siap untuk esok hari
+ * Helper internal: Upload pending transactions, activity logs, & daily stocks to server
  */
-export async function syncDailyTransactions(sheetName, onProgress = () => {}) {
+async function uploadAllPendingData(sheetName, onProgress = () => {}) {
   // 1. Validasi Sinyal & Healthcheck Server
-  onProgress(0, 0, 'Memeriksa kestabilan koneksi internet & server...');
+  onProgress(5, 0, 'Memeriksa kestabilan koneksi internet & server...');
   const health = await checkServerConnection();
   if (!health.online) {
     throw new Error(health.message);
   }
 
   // 2. Ambil seluruh transaksi lokal berstatus PENDING
-  onProgress(0, 0, 'Mengambil transaksi lokal yang siap ditransfer...');
+  onProgress(10, 0, 'Mengambil transaksi lokal yang siap ditransfer...');
   const pendingTx = await getPendingTransactions(sheetName);
 
   let totalUploaded = 0;
@@ -85,11 +83,12 @@ export async function syncDailyTransactions(sheetName, onProgress = () => {}) {
       const chunkEnd = Math.min(total, (cIdx + 1) * CHUNK_SIZE);
 
       onProgress(
-        Math.round((totalUploaded / total) * 70),
+        Math.round(15 + (totalUploaded / total) * 60),
         total,
         `Mentransfer transaksi ${chunkStart} - ${chunkEnd} dari ${total} ke MongoDB...`
       );
 
+      // PENTING: Waktu transaksi dibuat (createdAt) dan structured items WAJIB DIBAWA!
       const payload = chunk.map(tx => ({
         localId: tx.localId,
         deviceId: tx.deviceId,
@@ -105,7 +104,9 @@ export async function syncDailyTransactions(sheetName, onProgress = () => {}) {
         isDeleted: tx.isDeleted || false,
         deletedAt: tx.deletedAt || null,
         printCount: tx.printCount || 0,
-        overrideDbId: tx.overrideDbId || undefined
+        overrideDbId: tx.overrideDbId || undefined,
+        createdAt: tx.createdAt, // Waktu riil kasir input transaksi
+        items: tx.items || []    // Structured items untuk perhitungan quantity terjual
       }));
 
       try {
@@ -133,7 +134,7 @@ export async function syncDailyTransactions(sheetName, onProgress = () => {}) {
     }
   }
 
-  // Jika ada error upload transaksi, jangan reset lokal agar data kasir tidak hilang sebelum masuk server
+  // Jika ada error upload transaksi, jangan lanjutkan
   if (errors.length > 0) {
     throw new Error(`Sebagian data gagal terkirim: ${errors.join(', ')}. Data lokal tetap dipertahankan.`);
   }
@@ -142,7 +143,7 @@ export async function syncDailyTransactions(sheetName, onProgress = () => {}) {
   try {
     const localLogs = await getLocalActivityLogs(sheetName, 200);
     if (localLogs && localLogs.length > 0) {
-      onProgress(85, pendingTx.length || 1, 'Mentransfer log audit harian ke MongoDB...');
+      onProgress(80, pendingTx.length || 1, 'Mentransfer log audit harian ke MongoDB...');
       await fetch(ACTIVITY_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -153,20 +154,68 @@ export async function syncDailyTransactions(sheetName, onProgress = () => {}) {
     console.warn('[SyncEngine] Skip log sync:', logErr);
   }
 
-  // 5. PURGE & RESET LOCAL DATA TO ZERO (Karakteristik Offline Sejati)
-  // Data sudah aman tersimpan di MongoDB luar sana, sekarang bersihkan device tablet
-  onProgress(95, pendingTx.length || 1, 'Membersihkan memori tablet & mereset stok ke 0...');
-  await resetLocalDailyState(sheetName);
+  // 5. Transfer Data Stok Harian & Riwayat Penyesuaian (+/-) ke MongoDB
+  try {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const dailyStocks = await getAllDailyStocks(sheetName, todayStr);
+    if (dailyStocks && dailyStocks.length > 0) {
+      onProgress(90, pendingTx.length || 1, 'Mentransfer data stok & histori perubahan ke MongoDB...');
+      await fetch(`${BACKEND_BASE_URL}/api/daily-stocks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dailyStocks)
+      }).catch(stockErr => console.warn('[SyncEngine] Backup daily stocks warning:', stockErr));
+    }
+  } catch (stockErr) {
+    console.warn('[SyncEngine] Skip daily stocks sync:', stockErr);
+  }
 
-  onProgress(100, pendingTx.length || 1, 'Sinkronisasi selesai. Tablet telah di-reset ke 0.');
+  return { totalUploaded, pendingCount: pendingTx.length };
+}
+
+/**
+ * AKSI 1: "Kirim Data"
+ * Mentransfer seluruh transaksi, log, dan data stok ke MongoDB tanpa membersihkan tablet.
+ */
+export async function sendDataOnly(sheetName, onProgress = () => {}) {
+  const { totalUploaded } = await uploadAllPendingData(sheetName, onProgress);
+  onProgress(100, totalUploaded, 'Pengiriman data selesai.');
 
   return {
     success: true,
-    syncedCount: totalUploaded,
+    uploadedCount: totalUploaded,
     message: totalUploaded > 0
-      ? `Alhamdulillah! Berhasil mentransfer ${totalUploaded} transaksi ke MongoDB. Memori tablet telah dibersihkan dan stok di-reset ke 0 untuk operasional besok.`
-      : 'Penyimpanan lokal tablet telah bersih dan di-reset ke 0.'
+      ? `Berhasil mengirim ${totalUploaded} transaksi ke Cloud MongoDB.`
+      : 'Tidak ada transaksi baru yang perlu dikirim.'
   };
+}
+
+/**
+ * AKSI 2: "Tutup Toko"
+ * Mentransfer seluruh transaksi, log, dan data stok ke MongoDB, lalu me-reset tablet ke 0 untuk esok hari.
+ */
+export async function closeStoreAndReset(sheetName, onProgress = () => {}) {
+  const { totalUploaded } = await uploadAllPendingData(sheetName, onProgress);
+
+  onProgress(95, totalUploaded, 'Mengosongkan memori tablet & mereset stok ke 0...');
+  await resetLocalDailyState(sheetName);
+
+  onProgress(100, totalUploaded, 'Tutup toko selesai. Tablet telah di-reset ke 0.');
+
+  return {
+    success: true,
+    uploadedCount: totalUploaded,
+    message: totalUploaded > 0
+      ? `Tutup toko berhasil! ${totalUploaded} transaksi telah tersimpan di Cloud MongoDB dan tablet siap untuk besok.`
+      : 'Tutup toko selesai. Data tablet telah bersih dan siap untuk besok.'
+  };
+}
+
+/**
+ * Backward compatibility alias for syncDailyTransactions
+ */
+export async function syncDailyTransactions(sheetName, onProgress = () => {}) {
+  return await closeStoreAndReset(sheetName, onProgress);
 }
 
 /**
@@ -179,4 +228,3 @@ export async function resetLocalDataOnly(sheetName) {
     message: 'Data lokal tablet berhasil di-reset ke 0 (seluruh stok 0 dan transaksi kosong).'
   };
 }
-

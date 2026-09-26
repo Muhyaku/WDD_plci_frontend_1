@@ -10,7 +10,7 @@
 // =============================================================================
 
 const DB_NAME = 'PLCI_POS_LOCAL_DB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 // Nama Object Stores (Tabel Lokal)
 export const STORES = {
@@ -19,7 +19,8 @@ export const STORES = {
   ACTIVITY_LOGS: 'activity_logs',
   PARKED_ORDERS: 'parked_orders',
   SETTINGS: 'settings',
-  SYNC_META: 'sync_meta'
+  SYNC_META: 'sync_meta',
+  DAILY_STOCKS: 'daily_stocks'
 };
 
 let dbInstance = null;
@@ -104,6 +105,15 @@ export function openDatabase() {
       // Key: key (string)
       if (!db.objectStoreNames.contains(STORES.SYNC_META)) {
         db.createObjectStore(STORES.SYNC_META, { keyPath: 'key' });
+      }
+
+      // 6. Store: DAILY_STOCKS (Data Stok Harian & Histori Penyesuaian +/-)
+      // Key: id (string: `${sheet}_${tanggal}_${menuId}`)
+      if (!db.objectStoreNames.contains(STORES.DAILY_STOCKS)) {
+        const stockStore = db.createObjectStore(STORES.DAILY_STOCKS, { keyPath: 'id' });
+        stockStore.createIndex('sheet', 'sheet', { unique: false });
+        stockStore.createIndex('tanggal', 'tanggal', { unique: false });
+        stockStore.createIndex('menuId', 'menuId', { unique: false });
       }
     };
 
@@ -640,18 +650,137 @@ export async function resetLocalMenuStock(sheetName) {
 }
 
 /**
+ * Menghapus seluruh data stok harian lokal dari IndexedDB tablet
+ */
+export async function clearLocalDailyStocks(sheetName) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES.DAILY_STOCKS, 'readwrite');
+    const store = tx.objectStore(STORES.DAILY_STOCKS);
+    const req = store.clear();
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
  * Reset menyeluruh harian kasir lokal (Closing Store Reset)
  * 1. Mengosongkan transaksi lokal (karena sudah ditransfer seutuhnya ke cloud MongoDB)
  * 2. Mengosongkan activity logs lokal
  * 3. Mengosongkan parked orders lokal
  * 4. Mereset stok menu lokal ke 0 (nama & harga tetap aman)
+ * 5. Mengosongkan daily stocks lokal
  */
 export async function resetLocalDailyState(sheetName) {
   await Promise.all([
     clearLocalTransactions(sheetName),
     clearLocalActivityLogs(sheetName),
     clearLocalParkedOrders(sheetName),
-    resetLocalMenuStock(sheetName)
+    resetLocalMenuStock(sheetName),
+    clearLocalDailyStocks(sheetName)
   ]);
   return { success: true };
+}
+
+// =============================================================================
+// DAILY STOCK & AUDIT HISTORI STOK (+ / -) REPOSITORY
+// =============================================================================
+
+/**
+ * Mengambil data stok harian untuk item tertentu
+ */
+export async function getDailyStock(sheet, tanggal, menuId) {
+  const id = `${sheet}_${tanggal}_${menuId}`;
+  return withStore(STORES.DAILY_STOCKS, 'readonly', async (store) => {
+    return promisify(store.get(id));
+  });
+}
+
+/**
+ * Mengambil semua data stok harian untuk tanggal dan cabang tertentu
+ */
+export async function getAllDailyStocks(sheet, tanggal) {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES.DAILY_STOCKS, 'readonly');
+    const store = tx.objectStore(STORES.DAILY_STOCKS);
+    const index = store.index('tanggal');
+    const req = index.getAll(tanggal);
+    req.onsuccess = () => {
+      const records = req.result || [];
+      const filtered = sheet ? records.filter(r => !r.sheet || r.sheet === sheet) : records;
+      resolve(filtered);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/**
+ * Menyimpan data stok harian (misal saat konfirmasi stok awal)
+ */
+export async function saveDailyStock(data) {
+  const id = `${data.sheet}_${data.tanggal}_${data.menuId}`;
+  const record = {
+    ...data,
+    id,
+    updatedAt: new Date().toISOString()
+  };
+  await withStore(STORES.DAILY_STOCKS, 'readwrite', (store) => {
+    store.put(record);
+  });
+  return record;
+}
+
+/**
+ * Mencatat penyesuaian stok (+ atau -) ke histori stok harian
+ * sekaligus mengupdate stok live di MENU_MASTER!
+ */
+export async function recordStockAdjustment({ sheet, tanggal, menuId, menuName, category, delta, type, currentStock }) {
+  const id = `${sheet}_${tanggal}_${menuId}`;
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+  let existing = await getDailyStock(sheet, tanggal, menuId);
+  if (!existing) {
+    existing = {
+      id,
+      sheet,
+      tanggal,
+      menuId,
+      menuName: menuName || menuId,
+      category: category || 'Satuan',
+      stokAwal: currentStock || 0,
+      stokAwalTime: timeStr,
+      isConfirmed: true,
+      history: [],
+      totalStokInput: currentStock || 0
+    };
+  }
+
+  const baseInput = existing.totalStokInput !== undefined ? existing.totalStokInput : (existing.stokAwal || 0);
+  const newStockAfter = Math.max(0, baseInput + delta);
+  const adjustmentEntry = {
+    delta,
+    type, // 'penambahan' | 'pengurangan'
+    time: timeStr,
+    timestamp: now.toISOString(),
+    currentStockAfter: newStockAfter,
+    note: `${type === 'penambahan' ? 'Tambah' : 'Kurang'} via Kasir`
+  };
+
+  existing.history = Array.isArray(existing.history) ? [...existing.history, adjustmentEntry] : [adjustmentEntry];
+  existing.totalStokInput = newStockAfter;
+  existing.updatedAt = now.toISOString();
+
+  await withStore(STORES.DAILY_STOCKS, 'readwrite', (store) => {
+    store.put(existing);
+  });
+
+  // Sinkronkan juga stok ke MENU_MASTER lokal
+  await updateLocalMenuItem(menuId, {
+    stock: newStockAfter,
+    lastUpdatedDate: tanggal
+  });
+
+  return existing;
 }

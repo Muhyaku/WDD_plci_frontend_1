@@ -272,6 +272,13 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       status: isPark ? 'BELUM_BAYAR' : 'LUNAS'
     };
 
+    const cartItems = Object.values(cart).map(i => ({
+      menuId: i.id,
+      name: i.name,
+      qty: Number(i.qty) || 1,
+      price: Number(i.price) || 0
+    }));
+
     const payloads = [{
       sheet: branchInfo.sheetName,
       tanggal: todayStr,
@@ -279,7 +286,9 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       bca: isPark ? 0 : (fastPayMethod === 'BCA' ? totalCartPrice : 0),
       gofood: isPark ? 0 : (fastPayMethod === 'QRIS' ? totalCartPrice : 0),
       jenisPengeluaran: isPark ? `[UNPAID] [${finalQueueStr}] ${itemsStr}` : `[${finalQueueStr}] ${itemsStr}`,
-      totalPengeluaran: 0
+      totalPengeluaran: 0,
+      createdAt: new Date().toISOString(),
+      items: cartItems
     }];
 
     // --- ATOMIC PERSISTENCE: Simpan transaksi ke IndexedDB lokal (<50ms) ---
@@ -295,7 +304,9 @@ export default function FastCashierView({ branchInfo, onLogout }) {
         dbId: null,
         status: 'BELUM_BAYAR',
         tanggal: todayStr,
+        createdAt: payloads[0].createdAt,
         rawCart: cart,
+        itemsList: cartItems,
       };
       setLocalOrders(prev => [...prev, newOrder]);
       saveLocalParkedOrder(newOrder).catch(console.warn);
@@ -457,11 +468,6 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       <div className={`w-full lg:w-[65%] xl:w-[70%] flex-col h-full overflow-hidden relative ${mobileTab === 'cart' ? 'hidden lg:flex' : 'flex'}`}>
         {/* BARIS ATAS: DAFTAR PARKIRAN */}
         <div className="bg-white p-3 border-b border-gray-200 flex gap-3 overflow-x-auto shrink-0 shadow-sm items-center h-[130px] scrollbar-hide">
-          {/* LOGOUT BUTTON */}
-          <button onClick={onLogout} className="bg-gray-900 text-white font-black text-xs px-2 py-2 rounded-2xl border-b-4 border-gray-950 flex flex-col items-center justify-center shrink-0 h-full shadow-lg active:scale-95 transition-all w-[100px] hover:bg-black group">
-            <LogOut size={28} className="mb-1 text-gray-300 group-hover:-translate-x-1 transition-transform" /> KELUAR
-          </button>
-
           {/* REFRESH BUTTON */}
           <button onClick={loadData} disabled={isFetching} className="bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-black text-xs px-2 py-2 rounded-2xl flex flex-col items-center justify-center shrink-0 h-full shadow-sm active:scale-95 transition-all w-[80px]">
             <RefreshCw size={24} className={`mb-1 ${isFetching ? 'animate-spin' : ''}`} /> REFRESH

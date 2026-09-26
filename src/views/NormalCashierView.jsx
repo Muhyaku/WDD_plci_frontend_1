@@ -377,11 +377,40 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
       time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }), printCount: 0,
     };
 
+    const cartItems = Object.values(cart).map(i => ({
+      menuId: i.id,
+      name: i.name,
+      qty: Number(i.qty) || 1,
+      price: Number(i.price) || 0
+    }));
+
+    const nowIso = new Date().toISOString();
+
     let payloads = [];
     if (customerModal.type === 'BELUM_BAYAR') {
-      payloads.push({ sheet: branchInfo.sheetName, tanggal: todayStr, cash: 0, bca: 0, gofood: 0, jenisPengeluaran: `[UNPAID] [${finalQueueStr}] ${itemsStr}`, totalPengeluaran: 0 });
+      payloads.push({
+        sheet: branchInfo.sheetName,
+        tanggal: todayStr,
+        cash: 0,
+        bca: 0,
+        gofood: 0,
+        jenisPengeluaran: `[UNPAID] [${finalQueueStr}] ${itemsStr}`,
+        totalPengeluaran: 0,
+        createdAt: nowIso,
+        items: cartItems
+      });
     } else {
-      payloads.push({ sheet: branchInfo.sheetName, tanggal: todayStr, cash: paymentMethod === 'Cash' ? totalCartPrice : 0, bca: paymentMethod === 'BCA' ? totalCartPrice : 0, gofood: paymentMethod === 'QRIS' ? totalCartPrice : 0, jenisPengeluaran: `[${qStr}${finalName}] ${itemsStr}`, totalPengeluaran: 0 });
+      payloads.push({
+        sheet: branchInfo.sheetName,
+        tanggal: todayStr,
+        cash: paymentMethod === 'Cash' ? totalCartPrice : 0,
+        bca: paymentMethod === 'BCA' ? totalCartPrice : 0,
+        gofood: paymentMethod === 'QRIS' ? totalCartPrice : 0,
+        jenisPengeluaran: `[${qStr}${finalName}] ${itemsStr}`,
+        totalPengeluaran: 0,
+        createdAt: nowIso,
+        items: cartItems
+      });
     }
 
     // --- ATOMIC PERSISTENCE: Simpan transaksi ke IndexedDB lokal (<50ms) ---
@@ -396,7 +425,9 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
         localId: localRecord.localId,
         dbId: null,
         status: 'BELUM_BAYAR',
+        createdAt: nowIso,
         rawCart: cart,
+        itemsList: cartItems,
         rawCustomerName: customerName,
         rawPickupType: pickupType,
         rawPickupCondition: pickupCondition,
@@ -451,6 +482,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
       jenisPengeluaran: finalJenisPengeluaran,
       totalPengeluaran: 0,
       overrideDbId: order.dbId || undefined,
+      createdAt: order.createdAt || new Date().toISOString(),
+      items: order.itemsList || []
     };
 
     if (order.localId) {

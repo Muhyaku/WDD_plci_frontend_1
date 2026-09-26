@@ -11,7 +11,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Settings, Save, X, Loader2, RefreshCw, Lock,
   AlertCircle, CheckCircle2, Edit3, Search, WifiOff, Database,
-  ShieldAlert, RotateCcw,
+  ShieldAlert, RotateCcw, Plus, Minus
 } from 'lucide-react';
 
 import {
@@ -24,7 +24,10 @@ import {
 } from '../shared/utils';
 import {
   updateLocalMenuItem,
-  addLocalActivityLog
+  addLocalActivityLog,
+  getDailyStock,
+  saveDailyStock,
+  recordStockAdjustment
 } from '../services/localDb';
 
 // =============================================================================
@@ -96,9 +99,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
   const [activityLogs, setActivityLogs] = useState(null);
   const [rawData, setRawData] = useState(null);
   const [isFetching, setIsFetching] = useState(true);
-  const [dbError, setDbError] = useState(null);
-
-  // --- EDIT MODAL STATE ---
+  const [dbError, setDbError] = us  // --- EDIT MODAL STATE ---
   const [editModal, setEditModal] = useState({
     isOpen: false,
     item: null,
@@ -106,6 +107,9 @@ export default function ProductEditView({ branchInfo, onLogout }) {
     tempName: '',
     tempPrice: '',
     tempStock: '',
+    isConfirmed: false,
+    stokAwal: 0,
+    dailyStockRecord: null,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState(null);
@@ -119,7 +123,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
   const baseMenuList = useMemo(() => getBaseMenuList(branchInfo.brand), [branchInfo.brand]);
 
   // =============================================================================
-  // LOAD DATA STRICT â€” Semua atau tidak sama sekali. Gagal = blok halaman.
+  // LOAD DATA STRICT — Semua atau tidak sama sekali. Gagal = blok halaman.
   // =============================================================================
   const loadData = useCallback(async (isBackground = false) => {
     if (!isBackground) setIsFetching(true);
@@ -155,7 +159,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
   }, [loadData]);
 
   // =============================================================================
-  // LIVE STOCK CALCULATIONS â€” hanya jika semua data berhasil dimuat dari DB
+  // LIVE STOCK CALCULATIONS — hanya jika semua data berhasil dimuat dari DB
   // =============================================================================
   const liveStockCalculations = useMemo(() => {
     if (!masterMenus || !activityLogs || !rawData) return {};
@@ -174,13 +178,26 @@ export default function ProductEditView({ branchInfo, onLogout }) {
   }, [activeMenuList, searchQuery]);
 
   // =============================================================================
-  // OPEN EDIT MODAL â€” Data LANGSUNG dari row DB, bukan dari kalkulasi
+  // OPEN EDIT MODAL — Load row DB & Daily Stock untuk menentukan status kunci
   // =============================================================================
-  const openEditModal = (item) => {
+  const openEditModal = async (item) => {
     const dbRow = masterMenus ? masterMenus.find(m => m.menuId === item.id) : null;
     const nameFromDb  = dbRow ? dbRow.name  : item.name;
     const priceFromDb = dbRow ? dbRow.price : item.price;
     const stockLive   = item.stock >= 0 ? item.stock : 0;
+
+    let dailyStock = null;
+    try {
+      dailyStock = await getDailyStock(branchInfo.sheetName, todayStr, item.id);
+    } catch (e) {
+      console.warn('Error fetching daily stock:', e);
+    }
+
+    const isConfirmed = Boolean(dailyStock && dailyStock.isConfirmed);
+    const stokAwal = dailyStock ? dailyStock.stokAwal : stockLive;
+    const currentTotal = dailyStock
+      ? (dailyStock.totalStokInput !== undefined ? dailyStock.totalStokInput : stockLive)
+      : stockLive;
 
     setEditModal({
       isOpen: true,
@@ -188,13 +205,62 @@ export default function ProductEditView({ branchInfo, onLogout }) {
       dbItem: dbRow,
       tempName:  nameFromDb,
       tempPrice: new Intl.NumberFormat('id-ID').format(priceFromDb),
-      tempStock: String(stockLive),
+      tempStock: String(currentTotal),
+      isConfirmed,
+      stokAwal,
+      dailyStockRecord: dailyStock,
     });
     setSubmitStatus(null);
   };
 
   // =============================================================================
-  // SAVE â€” PUT ke /api/menu lalu REFRESH DATA DARI DB untuk verifikasi
+  // HANDLE ADJUST STOCK (+ / -) DENGAN PENCATATAN HISTORI AUDIT
+  // =============================================================================
+  const handleAdjustStock = async (delta) => {
+    if (!editModal.item || isSubmitting) return;
+    const currentVal = parseInt(editModal.tempStock) || 0;
+    const newVal = Math.max(0, currentVal + delta);
+    const type = delta > 0 ? 'penambahan' : 'pengurangan';
+
+    try {
+      const updatedDaily = await recordStockAdjustment({
+        sheet: branchInfo.sheetName,
+        tanggal: todayStr,
+        menuId: editModal.item.id,
+        menuName: editModal.tempName,
+        category: editModal.item.category,
+        delta,
+        type,
+        currentStock: currentVal
+      });
+
+      await addLocalActivityLog({
+        sheet: branchInfo.sheetName,
+        actionCategory: 'UBAH_STOK',
+        menuName: editModal.tempName,
+        detailAction: `PENYESUAIAN STOK (${delta > 0 ? `+${delta}` : delta}): Mengubah stok dari [${currentVal}] menjadi [${newVal}] porsi.`,
+        timestamp: new Date().toLocaleTimeString('id-ID'),
+        dateString: todayStr
+      }).catch(console.warn);
+
+      setEditModal(prev => ({
+        ...prev,
+        tempStock: String(newVal),
+        dailyStockRecord: updatedDaily,
+        isConfirmed: true,
+        stokAwal: updatedDaily.stokAwal
+      }));
+
+      // Refresh data di background agar live list ter-update
+      loadData(true);
+    } catch (err) {
+      console.error('Error adjusting stock:', err);
+      showToast('error', 'Gagal mengubah stok: ' + err.message);
+    }
+  };
+
+  // =============================================================================
+  // SAVE — Simpan Nama, Harga, & Konfirmasi Stok Awal
   // =============================================================================
   const saveMasterMenu = async () => {
     if (isSubmitting || !editModal.item) return;
@@ -203,23 +269,12 @@ export default function ProductEditView({ branchInfo, onLogout }) {
     const newStock = parseInt(editModal.tempStock);
     const newName  = editModal.tempName.trim();
 
-    if (!newName) { showToast('error', 'âš ï¸ Nama produk tidak boleh kosong!'); return; }
-    if (isNaN(newStock) || newStock < 0) { showToast('error', 'âš ï¸ Stok harus berupa angka â‰¥ 0!'); return; }
-    if (newPrice < 0) { showToast('error', 'âš ï¸ Harga tidak boleh negatif!'); return; }
+    if (!newName) { showToast('error', '⚠️ Nama produk tidak boleh kosong!'); return; }
+    if (isNaN(newStock) || newStock < 0) { showToast('error', '⚠️ Stok harus berupa angka ≥ 0!'); return; }
+    if (newPrice < 0) { showToast('error', '⚠️ Harga tidak boleh negatif!'); return; }
 
     setIsSubmitting(true);
     setSubmitStatus(null);
-
-    const payload = {
-      sheet:            branchInfo.sheetName,
-      menuId:           editModal.item.id,
-      name:             newName,
-      price:            newPrice,
-      stock:            newStock,
-      currentLiveStock: editModal.item.stock,
-      isPaketan:        editModal.item.category === 'Paketan' ||
-                        editModal.item.id !== editModal.item.stockRefId,
-    };
 
     try {
       // 1. Simpan ke Local IndexedDB terlebih dahulu (Atomic write)
@@ -229,6 +284,25 @@ export default function ProductEditView({ branchInfo, onLogout }) {
         stock: newStock,
         lastUpdatedDate: todayStr,
       });
+
+      // 2. Jika bukan paketan, catat / konfirmasi stok awal di DailyStock jika belum confirmed
+      if (editModal.item.category !== 'Paketan') {
+        const existingDaily = editModal.dailyStockRecord;
+        if (!existingDaily || !existingDaily.isConfirmed) {
+          await saveDailyStock({
+            sheet: branchInfo.sheetName,
+            tanggal: todayStr,
+            menuId: editModal.item.id,
+            menuName: newName,
+            category: editModal.item.category,
+            stokAwal: newStock,
+            stokAwalTime: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+            isConfirmed: true,
+            history: [],
+            totalStokInput: newStock
+          });
+        }
+      }
 
       // Catat log aktivitas lokal jika stok berubah
       if (editModal.item.stock !== newStock) {
@@ -246,7 +320,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
 
       // Tutup modal setelah feedback visual singkat
       setTimeout(() => {
-        setEditModal({ isOpen: false, item: null, dbItem: null, tempName: '', tempPrice: '', tempStock: '' });
+        setEditModal({ isOpen: false, item: null, dbItem: null, tempName: '', tempPrice: '', tempStock: '', isConfirmed: false, stokAwal: 0, dailyStockRecord: null });
         setSubmitStatus(null);
       }, 700);
 
@@ -264,7 +338,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
 
   const closeModal = () => {
     if (isSubmitting) return;
-    setEditModal({ isOpen: false, item: null, dbItem: null, tempName: '', tempPrice: '', tempStock: '' });
+    setEditModal({ isOpen: false, item: null, dbItem: null, tempName: '', tempPrice: '', tempStock: '', isConfirmed: false, stokAwal: 0, dailyStockRecord: null });
     setSubmitStatus(null);
   };
 
@@ -436,36 +510,10 @@ export default function ProductEditView({ branchInfo, onLogout }) {
         </div>
       </div>
 
-      {/* ===== EDIT MODAL ===== */}
+      {/* ===== EDIT MODAL (HEADER POPUP DIHAPUS SEPENUHNYA SESUAI REQUIREMENT 4A) ===== */}
       {editModal.isOpen && (
         <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[200] flex items-center justify-center animate-in fade-in p-4">
           <div className="bg-white rounded-[2rem] shadow-2xl max-w-md w-[92vw] sm:w-full border border-gray-100 animate-in zoom-in-95 overflow-hidden max-h-[90dvh] flex flex-col">
-
-            {/* Modal Header */}
-            <div className="p-6 bg-blue-50 border-b border-blue-100 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 bg-blue-600 rounded-2xl flex items-center justify-center shadow-md">
-                  <Settings size={20} className="text-white" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-black text-gray-900 leading-tight">Edit Produk</h3>
-                  <p className="text-xs font-bold text-blue-600">{editModal.item?.category}</p>
-                </div>
-              </div>
-              <button
-                onClick={closeModal}
-                disabled={isSubmitting}
-                className="p-2 bg-white text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-colors border border-gray-200 disabled:opacity-50"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* DB Source Notice */}
-            <div className="px-6 pt-3 pb-2 flex items-center gap-2 text-[11px] font-bold text-emerald-700 bg-emerald-50 border-b border-emerald-100">
-              <Database size={13} />
-              <span>Data di bawah bersumber dari database. Simpan akan menggantikan data lama di DB.</span>
-            </div>
 
             {/* Modal Body */}
             <div className="p-6 space-y-5 flex-1 overflow-y-auto">
@@ -480,11 +528,6 @@ export default function ProductEditView({ branchInfo, onLogout }) {
                   onChange={e => setEditModal(prev => ({ ...prev, tempName: e.target.value }))}
                   onKeyDown={e => e.key === 'Enter' && saveMasterMenu()}
                 />
-                {editModal.dbItem && editModal.dbItem.name !== editModal.tempName && (
-                  <p className="text-[10px] text-amber-600 font-bold mt-1 ml-1">
-                    âš ï¸ Nama lama di DB: "{editModal.dbItem.name}"
-                  </p>
-                )}
               </div>
 
               {/* Harga */}
@@ -504,11 +547,6 @@ export default function ProductEditView({ branchInfo, onLogout }) {
                     onKeyDown={e => e.key === 'Enter' && saveMasterMenu()}
                   />
                 </div>
-                {editModal.dbItem && (
-                  <p className="text-[10px] text-slate-400 font-bold mt-1 ml-1">
-                    Harga di DB: {formatRupiah(editModal.dbItem.price)}
-                  </p>
-                )}
               </div>
 
               {/* Stok */}
@@ -516,43 +554,82 @@ export default function ProductEditView({ branchInfo, onLogout }) {
                 className={`p-4 rounded-xl border relative transition-all ${
                   editModal.item?.category === 'Paketan' ? 'bg-slate-100 border-slate-300' : 'bg-green-50 border-green-100'
                 }`}
-                onClick={() => {
-                  if (editModal.item?.category === 'Paketan') {
-                    showToast('warn', 'âš ï¸ Stok Paketan tidak bisa diubah langsung. Update via menu Satuan.');
-                  }
-                }}
               >
                 <label className={`block text-[10px] font-black uppercase tracking-widest mb-2 flex items-center gap-1.5 ${
                   editModal.item?.category === 'Paketan' ? 'text-slate-400' : 'text-green-700'
                 }`}>
-                  {editModal.item?.category === 'Paketan'
-                    ? <><Lock size={11} /> Stok Terkunci (Ikut Satuan)</>
-                    : 'Stok Baru (Nilai yang Akan Disimpan ke DB)'}
+                  {editModal.item?.category === 'Paketan' ? (
+                    <><Lock size={11} /> Stok Terkunci (Ikut Satuan)</>
+                  ) : editModal.isConfirmed ? (
+                    <><Lock size={11} /> Stok Awal Terkunci ({editModal.stokAwal})</>
+                  ) : (
+                    'Stok Produk'
+                  )}
                 </label>
-                <input
-                  type="number"
-                  min="0"
-                  className={`w-full px-4 py-3 border rounded-xl font-black text-2xl text-center transition-all outline-none ${
-                    editModal.item?.category === 'Paketan'
-                      ? 'bg-slate-200 border-slate-300 text-slate-400 pointer-events-none'
-                      : 'bg-white border-green-200 focus:border-green-500 text-gray-900'
-                  }`}
-                  value={editModal.tempStock}
-                  onChange={e => {
-                    if (editModal.item?.category !== 'Paketan') {
-                      setEditModal(prev => ({ ...prev, tempStock: e.target.value }));
-                    }
-                  }}
-                  readOnly={editModal.item?.category === 'Paketan'}
-                  onKeyDown={e => e.key === 'Enter' && saveMasterMenu()}
-                />
-                {editModal.item?.category !== 'Paketan' && editModal.dbItem && (
-                  <p className="text-[10px] text-slate-400 font-bold mt-1">
-                    Stok live saat ini: {editModal.item?.stock} porsi | Stok di DB: {editModal.dbItem.stock} porsi
-                  </p>
-                )}
-                {editModal.item?.category === 'Paketan' && (
-                  <div className="absolute inset-0 z-10 cursor-not-allowed rounded-xl" />
+
+                {editModal.item?.category === 'Paketan' ? (
+                  <input
+                    type="number"
+                    readOnly
+                    disabled
+                    className="w-full px-4 py-3 border rounded-xl font-black text-2xl text-center bg-slate-200 border-slate-300 text-slate-400 pointer-events-none"
+                    value={editModal.tempStock}
+                  />
+                ) : editModal.isConfirmed ? (
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleAdjustStock(-1)}
+                        className="w-14 h-14 bg-red-100 hover:bg-red-200 active:scale-90 text-red-700 font-black text-2xl rounded-2xl flex items-center justify-center transition-all border border-red-200 cursor-pointer shadow-xs shrink-0 select-none"
+                        title="Kurangi stok 1 (-1)"
+                      >
+                        <Minus size={22} />
+                      </button>
+                      <input
+                        type="number"
+                        readOnly
+                        disabled
+                        className="flex-1 px-4 py-3 border rounded-xl font-black text-2xl text-center bg-white border-green-300 text-gray-900 cursor-not-allowed select-none shadow-inner"
+                        value={editModal.tempStock}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleAdjustStock(1)}
+                        className="w-14 h-14 bg-emerald-600 hover:bg-emerald-700 active:scale-90 text-white font-black text-2xl rounded-2xl flex items-center justify-center transition-all shadow-md shadow-emerald-700/20 cursor-pointer shrink-0 select-none"
+                        title="Tambah stok 1 (+1)"
+                      >
+                        <Plus size={22} />
+                      </button>
+                    </div>
+                    {editModal.dailyStockRecord && editModal.dailyStockRecord.history && editModal.dailyStockRecord.history.length > 0 && (
+                      <div className="mt-2.5 text-[10px] text-gray-600 font-semibold bg-white/90 p-2.5 rounded-xl border border-green-200 max-h-24 overflow-y-auto">
+                        <span className="font-bold text-gray-800">Histori Penyesuaian (+ / -):</span>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {editModal.dailyStockRecord.history.map((h, idx) => (
+                            <span key={idx} className={`px-2 py-0.5 rounded-md text-[10px] font-black ${h.delta > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                              {h.delta > 0 ? `+${h.delta}` : h.delta} ({h.time})
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <input
+                      type="number"
+                      min="0"
+                      className="w-full px-4 py-3 border rounded-xl font-black text-2xl text-center bg-white border-green-200 focus:border-green-500 text-gray-900 outline-none"
+                      value={editModal.tempStock}
+                      onChange={e => setEditModal(prev => ({ ...prev, tempStock: e.target.value }))}
+                      placeholder="Input stok awal..."
+                      onKeyDown={e => e.key === 'Enter' && saveMasterMenu()}
+                    />
+                    <p className="text-[11px] text-green-700 font-bold mt-1.5">
+                      Input stok awal pagi hari. Simpan akan mengonfirmasi & mengunci kolom input ini.
+                    </p>
+                  </div>
                 )}
               </div>
             </div>
@@ -572,17 +649,17 @@ export default function ProductEditView({ branchInfo, onLogout }) {
                 className={`flex-[2] py-4 text-white font-black rounded-xl transition-all active:scale-95 shadow-lg disabled:opacity-50 flex items-center justify-center gap-2 border-b-4 ${
                   submitStatus === 'success' ? 'bg-green-500 border-green-700'
                   : submitStatus === 'error' ? 'bg-red-500 border-red-700'
-                  : 'bg-blue-600 hover:bg-blue-700 border-blue-800'
+                  : 'bg-emerald-600 hover:bg-emerald-700 border-emerald-800'
                 }`}
               >
                 {isSubmitting ? (
-                  <><Loader2 size={18} className="animate-spin" /> Menyimpan ke DB...</>
+                  <><Loader2 size={18} className="animate-spin" /> Menyimpan...</>
                 ) : submitStatus === 'success' ? (
-                  <><CheckCircle2 size={18} /> Tersimpan! Memuat ulang...</>
+                  <><CheckCircle2 size={18} /> Tersimpan!</>
                 ) : submitStatus === 'error' ? (
                   <><AlertCircle size={18} /> Gagal! Coba Lagi</>
                 ) : (
-                  <><Save size={18} /> SIMPAN PERUBAHAN</>
+                  <><Save size={18} /> {editModal.isConfirmed ? 'SIMPAN PERUBAHAN' : 'KONFIRMASI STOK AWAL'}</>
                 )}
               </button>
             </div>
