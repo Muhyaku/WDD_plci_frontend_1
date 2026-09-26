@@ -99,7 +99,9 @@ export default function ProductEditView({ branchInfo, onLogout }) {
   const [activityLogs, setActivityLogs] = useState(null);
   const [rawData, setRawData] = useState(null);
   const [isFetching, setIsFetching] = useState(true);
-  const [dbError, setDbError] = us  // --- EDIT MODAL STATE ---
+  const [dbError, setDbError] = useState(null);
+
+  // --- EDIT MODAL STATE ---
   const [editModal, setEditModal] = useState({
     isOpen: false,
     item: null,
