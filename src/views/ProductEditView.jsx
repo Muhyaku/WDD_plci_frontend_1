@@ -515,7 +515,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
       {/* ===== EDIT MODAL (HEADER POPUP DIHAPUS SEPENUHNYA SESUAI REQUIREMENT 4A) ===== */}
       {editModal.isOpen && (
         <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm z-[200] flex items-center justify-center animate-in fade-in p-4">
-          <div className="bg-white rounded-[2rem] shadow-2xl max-w-md w-[92vw] sm:w-full border border-gray-100 animate-in zoom-in-95 overflow-hidden max-h-[90dvh] flex flex-col">
+          <div className="bg-white rounded-[2rem] shadow-2xl max-w-[896px] w-[95vw] sm:w-full border border-gray-100 animate-in zoom-in-95 overflow-hidden max-h-[90dvh] flex flex-col">
 
             {/* Modal Body */}
             <div className="p-6 space-y-5 flex-1 overflow-y-auto">
