@@ -188,6 +188,10 @@ export default function ProductEditView({ branchInfo, onLogout }) {
     const nameFromDb  = dbRow ? dbRow.name  : item.name;
     const priceFromDb = dbRow ? dbRow.price : item.price;
     const stockLive   = item.stock >= 0 ? item.stock : 0;
+    // actualDbStock = stok di MENU_MASTER (sebelum dikurangi penjualan).
+    // Ini BERBEDA dari stockLive (yang sudah dikurangi qty terjual hari ini).
+    // Dipakai saat save adjustment agar tidak double-deduction oleh calculateLiveStock.
+    const actualDbStock = dbRow ? (dbRow.stock ?? 0) : 0;
 
     let dailyStock = null;
     try {
@@ -206,7 +210,8 @@ export default function ProductEditView({ branchInfo, onLogout }) {
       tempName:  nameFromDb,
       tempPrice: new Intl.NumberFormat('id-ID').format(priceFromDb),
       tempStock: String(stockLive), // Tampilkan stok live terkini saat modal dibuka
-      originalStock: stockLive,     // Simpan stok acuan saat modal dibuka
+      originalStock: stockLive,     // Basis delta dari perspektif user (live stock)
+      actualDbStock,                // Stok MENU_MASTER asli (sebelum sales) — untuk kalkulasi save
       isConfirmed,
       stokAwal,
       dailyStockRecord: dailyStock,
@@ -234,10 +239,20 @@ export default function ProductEditView({ branchInfo, onLogout }) {
     if (isSubmitting || !editModal.item) return;
 
     const newPrice = parseInt(editModal.tempPrice.replace(/\D/g, '')) || 0;
+    // newStock = stok live yang terlihat user setelah tekan +/-
     const newStock = parseInt(editModal.tempStock);
     const newName  = editModal.tempName.trim();
+    // originalStock = stok live saat modal dibuka (sudah dikurangi penjualan)
     const originalStock = parseInt(editModal.originalStock) || 0;
+    // netDelta = perubahan yang diminta user (dari perspektif live stock)
     const netDelta = newStock - originalStock;
+    // actualDbStock = stok di MENU_MASTER saat modal dibuka (SEBELUM dikurangi penjualan)
+    const actualDbStock = parseInt(editModal.actualDbStock) || 0;
+    // newDbStock = stok baru yang harus disimpan ke MENU_MASTER.
+    // PENTING: harus pakai actualDbStock + netDelta, BUKAN newStock langsung.
+    // Karena calculateLiveStock akan kurangi qty terjual dari dbStock;
+    // kalau pakai newStock (live) sebagai dbStock, penjualan akan dikurangi DUA KALI.
+    const newDbStock = Math.max(0, actualDbStock + netDelta);
 
     if (!newName) { showToast('error', '⚠️ Nama produk tidak boleh kosong!'); return; }
     if (isNaN(newStock) || newStock < 0) { showToast('error', '⚠️ Stok harus berupa angka ≥ 0!'); return; }
@@ -247,19 +262,19 @@ export default function ProductEditView({ branchInfo, onLogout }) {
     setSubmitStatus(null);
 
     try {
-      // 1. Simpan ke Local IndexedDB terlebih dahulu (Atomic write)
-      await updateLocalMenuItem(editModal.item.id, {
-        name: newName,
-        price: newPrice,
-        stock: newStock,
-        lastUpdatedDate: todayStr,
-      });
-
       // 2. Jika bukan paketan, kelola rekaman DailyStock
       if (editModal.item.category !== 'Paketan') {
         const existingDaily = editModal.dailyStockRecord;
         if (!existingDaily || !existingDaily.isConfirmed) {
-          // A. Konfirmasi Stok Awal pertama kali
+          // A. Konfirmasi Stok Awal pertama kali.
+          // newStock di sini adalah angka absolut yang diinput user (stok awal hari ini),
+          // dan langsung disimpan sebagai dbStock karena belum ada transaksi saat initial confirm.
+          await updateLocalMenuItem(editModal.item.id, {
+            name: newName,
+            price: newPrice,
+            stock: newStock,
+            lastUpdatedDate: todayStr,
+          });
           await saveDailyStock({
             sheet: branchInfo.sheetName,
             tanggal: todayStr,
@@ -273,7 +288,15 @@ export default function ProductEditView({ branchInfo, onLogout }) {
             totalStokInput: newStock
           });
         } else if (netDelta !== 0) {
-          // B. Catat histori penyesuaian PER CONFIRM (Hanya 1 entri per sesi konfirmasi!)
+          // B. Penyesuaian stok (+ / -) setelah stok awal terkunci.
+          // Simpan newDbStock (= actualDbStock + netDelta) ke MENU_MASTER agar calculateLiveStock
+          // bisa hitung dengan benar: liveStock = newDbStock - terjual.
+          await updateLocalMenuItem(editModal.item.id, {
+            name: newName,
+            price: newPrice,
+            stock: newDbStock,
+            lastUpdatedDate: todayStr,
+          });
           await recordStockAdjustment({
             sheet: branchInfo.sheetName,
             tanggal: todayStr,
@@ -283,7 +306,7 @@ export default function ProductEditView({ branchInfo, onLogout }) {
             delta: netDelta,
             type: netDelta > 0 ? 'penambahan' : 'pengurangan',
             currentStock: originalStock,
-            newStockAfter: newStock
+            newStockAfter: newDbStock // simpan dbStock bukan live stock
           });
 
           await addLocalActivityLog({
@@ -294,7 +317,21 @@ export default function ProductEditView({ branchInfo, onLogout }) {
             timestamp: new Date().toLocaleTimeString('id-ID'),
             dateString: todayStr
           }).catch(console.warn);
+        } else {
+          // Delta = 0, hanya update nama/harga
+          await updateLocalMenuItem(editModal.item.id, {
+            name: newName,
+            price: newPrice,
+            lastUpdatedDate: todayStr,
+          });
         }
+      } else {
+        // Paketan: tidak ada logika stok, hanya update nama/harga
+        await updateLocalMenuItem(editModal.item.id, {
+          name: newName,
+          price: newPrice,
+          lastUpdatedDate: todayStr,
+        });
       }
 
       setSubmitStatus('success');
