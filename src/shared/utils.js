@@ -249,17 +249,19 @@ export const calculateLiveStock = (rawData, activityLogs, masterMenus, baseMenuL
     });
 
     if (itemLogs.length > 0) {
-      let totalInput = 0;
+      // Ambil nilai newVal dari LOG TERAKHIR sebagai basis stok terkini setelah semua adjustments.
+      // Ini lebih akurat dibanding sum-of-diffs karena:
+      // - Konfirmasi stok awal (initial) TIDAK membuat log → sum-of-diffs mulai dari 0 dan hanya
+      //   menghitung delta, bukan total stok → menyebabkan stok jadi HABIS.
+      // - Log terakhir SELALU mencerminkan "menjadi [X]" yang merupakan stok total setelah adjustment.
+      let latestStock = baseMenu.dbStock; // fallback ke dbStock jika parsing gagal
       itemLogs.forEach(log => {
-        const match = log.detailAction.match(/dari \[([^\]]+)\] menjadi \[(\d+)\]/);
+        const match = log.detailAction.match(/menjadi \[(\d+)\]/);
         if (match) {
-          const oldVal = match[1].includes('HABIS') ? 0 : parseInt(match[1], 10);
-          const newVal = parseInt(match[2], 10);
-          const diff = newVal - oldVal;
-          if (diff !== 0) totalInput += diff;
+          latestStock = parseInt(match[1], 10);
         }
       });
-      inputMap[refId] = totalInput;
+      inputMap[refId] = latestStock;
     } else {
       // Tidak ada log restock hari ini → dbStock adalah stok awal yang di-set via Edit Product.
       inputMap[refId] = baseMenu.dbStock;
