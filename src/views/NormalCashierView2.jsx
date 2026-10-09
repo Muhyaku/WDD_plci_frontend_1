@@ -352,7 +352,7 @@ export default function NormalCashierView2({
       isDeleted: false,
       cash: paymentMethod === 'Cash' ? grandTotal : 0,
       bca: paymentMethod === 'BCA' ? grandTotal : 0,
-      gofood: paymentMethod === 'QRIS' ? grandTotal : 0,
+      qris: paymentMethod === 'QRIS' ? grandTotal : 0,  // FIX: gofood → qris
     };
     setRawData(prev => [...prev, optimisticTx]);
 

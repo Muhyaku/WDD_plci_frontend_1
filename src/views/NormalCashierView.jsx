@@ -393,7 +393,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
         tanggal: todayStr,
         cash: 0,
         bca: 0,
-        gofood: 0,
+        qris: 0,       // FIX: gunakan field qris (bukan gofood)
         jenisPengeluaran: `[UNPAID] [${finalQueueStr}] ${itemsStr}`,
         totalPengeluaran: 0,
         createdAt: nowIso,
@@ -405,7 +405,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
         tanggal: todayStr,
         cash: paymentMethod === 'Cash' ? totalCartPrice : 0,
         bca: paymentMethod === 'BCA' ? totalCartPrice : 0,
-        gofood: paymentMethod === 'QRIS' ? totalCartPrice : 0,
+        qris: paymentMethod === 'QRIS' ? totalCartPrice : 0, // FIX: gofood → qris
         jenisPengeluaran: `[${qStr}${finalName}] ${itemsStr}`,
         totalPengeluaran: 0,
         createdAt: nowIso,
@@ -478,7 +478,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
       tanggal: todayStr,
       cash: selectedMethod === 'Cash' ? order.total : 0,
       bca: selectedMethod === 'BCA' ? order.total : 0,
-      gofood: selectedMethod === 'QRIS' ? order.total : 0,
+      qris: selectedMethod === 'QRIS' ? order.total : 0,  // FIX: gofood → qris
       jenisPengeluaran: finalJenisPengeluaran,
       totalPengeluaran: 0,
       overrideDbId: order.dbId || undefined,
@@ -651,7 +651,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
     if (txData._id) {
       queueStr = txData.jenisPengeluaran ? txData.jenisPengeluaran.split(']')[0].replace('[', '') : 'Lunas';
       itemsStr = txData.jenisPengeluaran ? txData.jenisPengeluaran.split('] ')[1] : '';
-      total = (txData.cash || 0) + (txData.bca || 0) + (txData.gofood || 0);
+      total = (txData.cash || 0) + (txData.bca || 0) + (txData.qris || 0) + (txData.gofood || 0); // BACKWARD-COMPAT
       dateStr = new Date(txData.createdAt).toLocaleString('id-ID');
     } else {
       queueStr = txData.queue; itemsStr = txData.items; total = txData.total;
@@ -714,7 +714,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
     if (data._id) {
       pQueueStr = data.jenisPengeluaran ? data.jenisPengeluaran.split(']')[0].replace('[', '') : 'Lunas';
       pItemsStr = data.jenisPengeluaran ? data.jenisPengeluaran.split('] ')[1] : '';
-      pTotal = (data.cash || 0) + (data.bca || 0) + (data.gofood || 0);
+      pTotal = (data.cash || 0) + (data.bca || 0) + (data.qris || 0) + (data.gofood || 0); // BACKWARD-COMPAT
       pDateStr = new Date(data.createdAt).toLocaleString('id-ID');
     } else {
       pQueueStr = data.queue; pItemsStr = data.items; pTotal = data.total;
@@ -906,7 +906,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
             <div className="mt-4 pt-4 border-t border-gray-100 shrink-0">
               <div className="flex justify-between items-end mb-4 bg-gray-50 p-3 rounded-xl">
                 <span className="text-xs font-black text-gray-500 uppercase tracking-widest">Total Tagihan</span>
-                <span className="text-2xl font-black text-green-600">{formatRupiah(detailModal.data._id ? ((detailModal.data.cash || 0) + (detailModal.data.bca || 0) + (detailModal.data.gofood || 0)) : detailModal.data.total)}</span>
+                <span className="text-2xl font-black text-green-600">{formatRupiah(detailModal.data._id ? ((detailModal.data.cash || 0) + (detailModal.data.bca || 0) + (detailModal.data.qris || 0) + (detailModal.data.gofood || 0)) : detailModal.data.total)}</span>
               </div>
               <button onClick={() => handlePrintTransaction(detailModal.data)} className="w-full py-4 bg-gray-900 hover:bg-black text-white rounded-xl font-black flex items-center justify-center gap-2 active:scale-95 transition-all shadow-xl"><Printer size={20} /> Cetak Nota Sekarang</button>
             </div>
@@ -1484,7 +1484,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
               .slice()
               .reverse()
               .map(item => {
-                const income = (item.cash || 0) + (item.bca || 0) + (item.gofood || 0);
+                const income = (item.cash || 0) + (item.bca || 0) + (item.qris || 0) + (item.gofood || 0); // BACKWARD-COMPAT
                 const queueLabel = item.jenisPengeluaran ? item.jenisPengeluaran.split(']')[0].replace('[', '') : 'Lunas';
                 const rawItemsStr = item.jenisPengeluaran ? item.jenisPengeluaran.split('] ')[1] : '';
                 const itemArray = (rawItemsStr || '').split(',').map(i => i.trim()).filter(i => i);
@@ -1495,7 +1495,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
                   else if (str.startsWith('++ PAY:')) { const pd = str.replace('++ PAY:', '').split('|'); payMethodStr = pd[0]; }
                   else ordersList.push(str);
                 });
-                if (!payMethodStr) { if (item.cash > 0) payMethodStr = 'CASH'; else if (item.bca > 0) payMethodStr = 'BCA'; else if (item.gofood > 0) payMethodStr = 'QRIS'; }
+                if (!payMethodStr) { if (item.cash > 0) payMethodStr = 'CASH'; else if (item.bca > 0) payMethodStr = 'BCA'; else if ((item.qris || 0) > 0 || (item.gofood || 0) > 0) payMethodStr = 'QRIS'; } // BACKWARD-COMPAT
                 let badgeColor = 'bg-gray-100 text-gray-700 border-gray-300';
                 if (payMethodStr === 'BCA') badgeColor = 'bg-blue-50 text-blue-700 border-blue-200';
                 else if (payMethodStr === 'QRIS') badgeColor = 'bg-purple-50 text-purple-700 border-purple-200';

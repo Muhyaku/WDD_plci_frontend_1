@@ -284,7 +284,7 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       tanggal: todayStr,
       cash: isPark ? 0 : (fastPayMethod === 'Cash' ? totalCartPrice : 0),
       bca: isPark ? 0 : (fastPayMethod === 'BCA' ? totalCartPrice : 0),
-      gofood: isPark ? 0 : (fastPayMethod === 'QRIS' ? totalCartPrice : 0),
+      qris: isPark ? 0 : (fastPayMethod === 'QRIS' ? totalCartPrice : 0), // FIX: gofood → qris
       jenisPengeluaran: isPark ? `[UNPAID] [${finalQueueStr}] ${itemsStr}` : `[${finalQueueStr}] ${itemsStr}`,
       totalPengeluaran: 0,
       createdAt: new Date().toISOString(),
@@ -341,7 +341,7 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       tanggal: todayStr,
       cash: payMethod === 'Cash' ? targetOrder.total : 0,
       bca: payMethod === 'BCA' ? targetOrder.total : 0,
-      gofood: payMethod === 'QRIS' ? targetOrder.total : 0,
+      qris: payMethod === 'QRIS' ? targetOrder.total : 0,  // FIX: gofood → qris
       jenisPengeluaran: finalJenisPengeluaran,
       totalPengeluaran: 0,
       overrideDbId: targetOrder.dbId || undefined,

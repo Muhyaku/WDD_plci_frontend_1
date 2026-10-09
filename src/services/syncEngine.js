@@ -97,8 +97,9 @@ async function uploadAllPendingData(sheetName, onProgress = () => {}) {
         tanggal: tx.tanggal,
         cash: tx.cash || 0,
         bca: tx.bca || 0,
-        gofood: tx.gofood || 0,
-        qris: tx.qris || 0,
+        // gofood dihapus: kasir sekarang simpan QRIS ke field qris langsung
+        // BACKWARD-COMPAT: jika ada data lama dengan gofood, tetap dikirim
+        qris: (tx.qris || 0) + (tx.gofood || 0), // merge gofood ke qris untuk data transisi
         jenisPengeluaran: tx.jenisPengeluaran || '',
         totalPengeluaran: tx.totalPengeluaran || 0,
         totalPendapatan: tx.totalPendapatan || 0,
