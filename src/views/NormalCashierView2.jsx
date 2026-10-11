@@ -50,7 +50,14 @@ export default function NormalCashierView2({
   const [localOrders, setLocalOrders] = useState(() => {
     try {
       const saved = localStorage.getItem(`unpaid_orders_${branchInfo?.id}`);
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      const currentToday = getTodayStr();
+      return parsed.filter(ord => {
+        const ordDate = ord.tanggal || (ord.createdAt ? new Date(ord.createdAt).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) : '');
+        return !ordDate || ordDate === currentToday;
+      });
     } catch (e) {
       return [];
     }

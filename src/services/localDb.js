@@ -612,6 +612,22 @@ export async function clearLocalActivityLogs(sheetName) {
  * Menghapus seluruh pesanan parkir / belum bayar lokal dari tablet
  */
 export async function clearLocalParkedOrders(sheetName) {
+  // Bersihkan juga cache di localStorage agar antrian hari esok bersih kembali ke A-001
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('unpaid_orders_')) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+    }
+  } catch (e) {
+    console.warn('Gagal membersihkan unpaid_orders di localStorage:', e);
+  }
+
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORES.PARKED_ORDERS, 'readwrite');

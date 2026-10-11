@@ -68,7 +68,15 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
   const [localOrders, setLocalOrders] = useState(() => {
     try {
       const saved = localStorage.getItem(`unpaid_orders_${branchInfo?.id || 'default'}`);
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      const currentToday = getTodayStr();
+      // WAJIB: Auto-prune pesanan parkir dari hari kemarin agar antrian hari baru selalu mulai dari A-001
+      return parsed.filter(ord => {
+        const ordDate = ord.tanggal || (ord.createdAt ? new Date(ord.createdAt).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) : '');
+        return !ordDate || ordDate === currentToday;
+      });
     } catch (e) { return []; }
   });
 
@@ -425,6 +433,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
         localId: localRecord.localId,
         dbId: null,
         status: 'BELUM_BAYAR',
+        tanggal: todayStr,
         createdAt: nowIso,
         rawCart: cart,
         itemsList: cartItems,

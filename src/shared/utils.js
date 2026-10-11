@@ -96,8 +96,31 @@ export const formatItemOptions = (opts) => {
   return p.length > 0 ? ` :: ${p.join(' | ')}` : '';
 };
 
+// --- EKSTRAKSI NOMOR ANTRIAN TERPROTEKSI ---
+// Hanya mengambil nomor antrian dari tag header antrian, tidak akan pernah terkecoh oleh catatan pesanan, nama meja, atau nama menu!
+export const extractQueueNumber = (str) => {
+  if (!str || typeof str !== 'string') return null;
+
+  // 1. Format jenisPengeluaran di database / IndexedDB:
+  // Contoh: "[A-001 - Budi] ** MAKAN SINI **..." atau "[A-001]..."
+  // atau "[UNPAID] [A-001 - Budi (Ambil: Pagi)]..."
+  const prefixMatch = str.match(/^\s*(?:\[UNPAID\]\s*)?\[\s*A-(\d+)/i);
+  if (prefixMatch && prefixMatch[1]) {
+    return parseInt(prefixMatch[1], 10);
+  }
+
+  // 2. Format order.queue di local parked orders:
+  // Contoh: "A-001", "A-001 - Budi", "A-001 (Ambil: Pagi)"
+  const labelMatch = str.match(/^\s*A-(\d+)/i);
+  if (labelMatch && labelMatch[1]) {
+    return parseInt(labelMatch[1], 10);
+  }
+
+  return null;
+};
+
 // --- UNIFIED QUEUE NUMBER CALCULATOR ---
-// Menghitung nomor antrian berikutnya (A-001, A-002, dst) secara konsisten di semua Mode Kasir
+// Menghitung nomor antrian berikutnya (A-001, A-002, dst) secara konsisten dan terproteksi di semua Mode Kasir
 export const calculateNextQueueNumber = (rawData, localOrders = [], todayStr = '') => {
   const safeRaw = Array.isArray(rawData) ? rawData : [];
   const safeLocal = Array.isArray(localOrders) ? localOrders : [];
@@ -105,25 +128,30 @@ export const calculateNextQueueNumber = (rawData, localOrders = [], todayStr = '
 
   let maxQueue = 0;
 
-  // 1. Scan transactions from database for today
+  // 1. Scan transaksi dari database / IndexedDB KHUSUS HARI INI
   safeRaw.forEach(t => {
-    if (t.isDeleted || (t.jenisPengeluaran && t.jenisPengeluaran.includes('[LAPORAN SISTEM]'))) return;
-    if (t.tanggal && t.tanggal !== targetDate) return;
+    if (t.isDeleted) return; // Transaksi yang dibatalkan/dihapus tidak boleh mempengaruhi nomor antrian
+    if (t.jenisPengeluaran && t.jenisPengeluaran.includes('[LAPORAN SISTEM]')) return;
 
-    const match = (t.jenisPengeluaran || '').match(/A-(\d+)/);
-    if (match && match[1]) {
-      const qNum = parseInt(match[1], 10);
-      if (qNum > maxQueue) maxQueue = qNum;
+    // WAJIB: Pastikan tanggal transaksi persis sama dengan targetDate
+    const txDate = t.tanggal || (t.createdAt ? new Date(t.createdAt).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) : '');
+    if (txDate && txDate !== targetDate) return;
+
+    const qNum = extractQueueNumber(t.jenisPengeluaran);
+    if (qNum && qNum > maxQueue) {
+      maxQueue = qNum;
     }
   });
 
-  // 2. Scan unpaid local orders / parked orders for today
+  // 2. Scan unpaid local orders / parked orders KHUSUS HARI INI
   safeLocal.forEach(ord => {
-    const queueStr = ord.queue || ord.id || '';
-    const match = String(queueStr).match(/A-(\d+)/);
-    if (match && match[1]) {
-      const qNum = parseInt(match[1], 10);
-      if (qNum > maxQueue) maxQueue = qNum;
+    // WAJIB: Pastikan order lokal berasal dari HARI INI (abaikan order sisa kemarin yang belum terhapus)
+    const ordDate = ord.tanggal || (ord.createdAt ? new Date(ord.createdAt).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }) : '');
+    if (ordDate && ordDate !== targetDate) return;
+
+    const qNum = extractQueueNumber(ord.queue);
+    if (qNum && qNum > maxQueue) {
+      maxQueue = qNum;
     }
   });
 
