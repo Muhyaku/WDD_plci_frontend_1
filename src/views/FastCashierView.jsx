@@ -340,7 +340,7 @@ export default function FastCashierView({ branchInfo, onLogout }) {
       .replace(/,\s*\+\+\s*PAY:.*$/, '')
       .replace(/^\[UNPAID\]\s*\[.*?\]\s*/, '');
 
-    const queueLabel = targetOrder.queue.split(' (')[0];
+    const queueLabel = (targetOrder.queue || '').split(' (')[0];
     const finalJenisPengeluaran = `[${queueLabel}] ${cleanItemsStr}, ++ PAY:${payMethod}|${targetOrder.total}|0`;
 
     const payload = {
@@ -413,7 +413,7 @@ export default function FastCashierView({ branchInfo, onLogout }) {
           <div className="bg-white rounded-[2rem] p-6 shadow-2xl max-w-lg w-full border border-gray-100 animate-in zoom-in-95 flex flex-col">
             <div className="flex justify-between items-center mb-5 border-b border-gray-100 pb-4">
               <div>
-                <h3 className="text-2xl font-black text-gray-900">{fastCheckoutModal.queue.split(' (')[0]}</h3>
+                <h3 className="text-2xl font-black text-gray-900">{(fastCheckoutModal.queue || '').split(' (')[0]}</h3>
                 <p className="text-xs font-bold text-gray-500 mt-1">Total Tagihan: <span className="text-orange-600 font-black">{formatRupiah(fastCheckoutModal.total)}</span></p>
               </div>
               <button onClick={() => setFastCheckoutModal(null)} className="p-2.5 bg-gray-100 hover:bg-gray-200 rounded-full text-gray-500 transition-colors active:scale-95"><X size={24} /></button>
@@ -422,10 +422,10 @@ export default function FastCashierView({ branchInfo, onLogout }) {
             <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 mb-6 max-h-48 overflow-y-auto">
               <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Detail Menu Pesanan:</p>
               <div className="flex flex-col gap-2">
-                {fastCheckoutModal.items.split(',').map((i, idx) => {
+                {(fastCheckoutModal.items || '').split(',').map((i, idx) => {
                   const str = i.trim();
                   if (str.startsWith('**') || str.startsWith('++')) return null;
-                  const cleanName = str.split('::')[0].trim();
+                  const cleanName = (str || '').split('::')[0]?.trim() || '';
                   return <span key={idx} className="text-sm font-bold text-gray-800 leading-snug border-b border-gray-200/50 pb-2 last:border-0 last:pb-0">{cleanName}</span>;
                 }).filter(Boolean)}
               </div>
@@ -486,17 +486,17 @@ export default function FastCashierView({ branchInfo, onLogout }) {
           </div>
 
           {employeeLocalOrders.map(order => {
-            const cleanItems = order.items.split(',').map(i => {
+            const cleanItems = (order.items || '').split(',').map(i => {
               const str = i.trim();
               if (str.startsWith('**') || str.startsWith('++')) return null;
-              return str.split('::')[0].trim();
+              return (str || '').split('::')[0]?.trim() || '';
             }).filter(Boolean).join(', ');
 
             return (
               <button key={order.id} onClick={() => setFastCheckoutModal(order)} className="bg-white border-2 border-gray-200 hover:border-orange-500 hover:shadow-md p-3 rounded-2xl shrink-0 text-left w-[260px] transition-all h-full flex flex-col group relative overflow-hidden active:scale-[0.98]">
                 <div className="absolute top-0 left-0 w-1.5 h-full bg-orange-400 group-hover:bg-orange-600 transition-colors"></div>
                 <div className="flex justify-between items-start mb-2 ml-2">
-                  <span className="font-black text-gray-900 text-lg leading-none">{order.queue.split(' (')[0]}</span>
+                  <span className="font-black text-gray-900 text-lg leading-none">{(order.queue || '').split(' (')[0]}</span>
                   <span className="font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded-lg border border-orange-100 text-xs shadow-sm">{formatRupiah(order.total)}</span>
                 </div>
                 <p className="text-xs font-bold text-gray-500 ml-2 line-clamp-2 leading-relaxed">{cleanItems}</p>

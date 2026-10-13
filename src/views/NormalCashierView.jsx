@@ -479,7 +479,7 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
     setIsSubmitting(true);
 
     const cleanItemsStr = (order.items || '').replace(/,\s*\+\+\s*PAY:.*$/, '');
-    const queueLabel = order.queue.split(' (Ambil:')[0];
+    const queueLabel = (order.queue || '').split(' (Ambil:')[0];
     const finalJenisPengeluaran = `[${queueLabel}] ${cleanItemsStr}, ++ PAY:${selectedMethod}|${order.total}|0`;
 
     const payload = {
@@ -658,8 +658,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
     let itemsStr = '', queueStr = '', total = 0, dateStr = '';
     let isLunas = true;
     if (txData._id) {
-      queueStr = txData.jenisPengeluaran ? txData.jenisPengeluaran.split(']')[0].replace('[', '') : 'Lunas';
-      itemsStr = txData.jenisPengeluaran ? txData.jenisPengeluaran.split('] ')[1] : '';
+      queueStr = txData.jenisPengeluaran ? (String(txData.jenisPengeluaran).split(']')[0] || '').replace('[', '') : (txData.queue || 'Lunas');
+      itemsStr = txData.jenisPengeluaran ? (String(txData.jenisPengeluaran).split('] ')[1] || '') : (txData.items || '');
       total = (txData.cash || 0) + (txData.bca || 0) + (txData.qris || 0) + (txData.gofood || 0); // BACKWARD-COMPAT
       dateStr = new Date(txData.createdAt).toLocaleString('id-ID');
     } else {
@@ -686,7 +686,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
       }
     });
     const bName = branchInfo?.name || 'Kasir Penjualan';
-    let receiptText = `\x1B\x40\x1B\x61\x01\x1B\x45\x01${bName.split('-')[0].trim()}\n\x1B\x45\x00${bName.split('-')[1]?.trim() || ''}\n--------------------------------\n`;
+    const bNameParts = String(bName).split('-');
+    let receiptText = `\x1B\x40\x1B\x61\x01\x1B\x45\x01${(bNameParts[0] || '').trim()}\n\x1B\x45\x00${bNameParts[1]?.trim() || ''}\n--------------------------------\n`;
     if (pOrderType) receiptText += `\x1B\x45\x01[ ${pOrderType} ]\n\x1B\x45\x00`;
     receiptText += `--------------------------------\n\x1B\x61\x00`;
     if (pCabbageOpt && pCabbageOpt !== 'TIDAK PAKE KOL') receiptText += `Kol    : ${pCabbageOpt}\n`;
@@ -721,8 +722,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
     if (!data) return null;
     let pItemsStr = '', pQueueStr = '', pTotal = 0, pDateStr = '', pIsLunas = true;
     if (data._id) {
-      pQueueStr = data.jenisPengeluaran ? data.jenisPengeluaran.split(']')[0].replace('[', '') : 'Lunas';
-      pItemsStr = data.jenisPengeluaran ? data.jenisPengeluaran.split('] ')[1] : '';
+      pQueueStr = data.jenisPengeluaran ? (String(data.jenisPengeluaran).split(']')[0] || '').replace('[', '') : (data.queue || 'Lunas');
+      pItemsStr = data.jenisPengeluaran ? (String(data.jenisPengeluaran).split('] ')[1] || '') : (data.items || '');
       pTotal = (data.cash || 0) + (data.bca || 0) + (data.qris || 0) + (data.gofood || 0); // BACKWARD-COMPAT
       pDateStr = new Date(data.createdAt).toLocaleString('id-ID');
     } else {
@@ -741,8 +742,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
     return (
       <div id="print-area" className="hidden print:block absolute top-0 left-0 w-[58mm] bg-white text-black p-2 font-mono text-[11px] leading-tight z-[9999]">
         <div className="text-center mb-2">
-          <h2 className="font-bold text-sm uppercase">{headerName.split('-')[0]}</h2>
-          <p className="text-[9px]">{headerName.split('-')[1] || ''}</p>
+          <h2 className="font-bold text-sm uppercase">{String(headerName).split('-')[0]?.trim() || headerName}</h2>
+          <p className="text-[9px]">{String(headerName).split('-')[1]?.trim() || ''}</p>
           <p className="text-[9px]">------------------------</p>
           <div className="my-1 py-1 border-y border-dashed border-black"><h3 className="font-black text-sm">{pIsLunas ? '>>> LUNAS <<<' : '>>> BELUM BAYAR <<<'}</h3></div>
         </div>
@@ -816,8 +817,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
                 </div>
               ) : (
                 [...employeeLocalOrders].sort((a, b) => tappingSortOrder === 'Terlama' ? a.id - b.id : b.id - a.id).map(order => {
-                  const qName = order.queue.split(' (')[0];
-                  const qTimeMatch = order.queue.match(/\((Ambil.*?)\)/);
+                  const qName = (order.queue || '').split(' (')[0];
+                  const qTimeMatch = (order.queue || '').match(/\((Ambil.*?)\)/);
                   const qTime = qTimeMatch ? qTimeMatch[1] : 'Ambil: Bebas/Nanti';
                   const rawItemsStr = order.items || '';
                   const itemArray = rawItemsStr.split(',').map(i => i.trim()).filter(i => i);
@@ -892,10 +893,10 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
             <div className="overflow-y-auto flex-1 pr-1 space-y-4">
               <div className="bg-gray-50 border border-gray-200 p-3 rounded-xl flex items-center justify-between">
                 <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Antrian / Nama</span>
-                <span className="font-black text-gray-900 text-lg">{detailModal.data._id ? (detailModal.data.jenisPengeluaran.split(']')[0].replace('[', '')) : detailModal.data.queue.split(' (Ambil:')[0]}</span>
+                <span className="font-black text-gray-900 text-lg">{detailModal.data._id ? ((detailModal.data.jenisPengeluaran || '').split(']')[0].replace('[', '')) : (detailModal.data.queue || '').split(' (Ambil:')[0]}</span>
               </div>
               {(() => {
-                const rawItemsStr = detailModal.data._id ? detailModal.data.jenisPengeluaran.split('] ')[1] : detailModal.data.items;
+                const rawItemsStr = detailModal.data._id ? (detailModal.data.jenisPengeluaran || '').split('] ')[1] : detailModal.data.items;
                 const itemArray = (rawItemsStr || '').split(',').map(i => i.trim()).filter(i => i);
                 let options = []; let ordersList = []; let noteStr = '';
                 itemArray.forEach(str => {
@@ -1494,8 +1495,8 @@ export default function NormalCashierView({ branchInfo, onLogout }) {
               .reverse()
               .map(item => {
                 const income = (item.cash || 0) + (item.bca || 0) + (item.qris || 0) + (item.gofood || 0); // BACKWARD-COMPAT
-                const queueLabel = item.jenisPengeluaran ? item.jenisPengeluaran.split(']')[0].replace('[', '') : 'Lunas';
-                const rawItemsStr = item.jenisPengeluaran ? item.jenisPengeluaran.split('] ')[1] : '';
+                const queueLabel = item.jenisPengeluaran ? (String(item.jenisPengeluaran).split(']')[0] || '').replace('[', '') : 'Lunas';
+                const rawItemsStr = item.jenisPengeluaran ? (String(item.jenisPengeluaran).split('] ')[1] || '') : '';
                 const itemArray = (rawItemsStr || '').split(',').map(i => i.trim()).filter(i => i);
                 let options = []; let ordersList = []; let noteStr = ''; let payMethodStr = '';
                 itemArray.forEach(str => {
